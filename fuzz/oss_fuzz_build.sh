@@ -5,10 +5,25 @@ export PKG_CONFIG_PATH="$WORK/lib/pkgconfig"
 export CPPFLAGS="-I$WORK/include"
 export LDFLAGS="-L$WORK/lib"
 
+# `-fuse-ld=gold` can't be passed via `CFLAGS` and `CXXFLAGS` as Meson
+# injects `-Werror=ignored-optimization-argument` during compile tests.
+# https://github.com/google/oss-fuzz/issues/12167
+# https://github.com/mesonbuild/meson/issues/6377#issuecomment-575977919
+if [[ "$CFLAGS" == *"-fuse-ld=gold"* ]]; then
+  export CFLAGS="${CFLAGS//-fuse-ld=gold/}"
+  export CC_LD=gold
+fi
+if [[ "$CXXFLAGS" == *"-fuse-ld=gold"* ]]; then
+  export CXXFLAGS="${CXXFLAGS//-fuse-ld=gold/}"
+  export CXX_LD=gold
+fi
+
+# Run as many parallel jobs as there are available CPU cores
+export MAKEFLAGS="-j$(nproc)"
+
 # libz
 pushd $SRC/zlib
 ./configure --static --prefix=$WORK
-make -j$(nproc) all
 make install
 popd
 
@@ -22,20 +37,14 @@ autoreconf -fi
   --disable-docs \
   --disable-dependency-tracking \
   --prefix=$WORK
-make -j$(nproc)
-make install
+make install doc_DATA=
 popd
 
 # lcms
 pushd $SRC/lcms
-./autogen.sh
-./configure \
-  --enable-static \
-  --disable-shared \
-  --disable-dependency-tracking \
-  --prefix=$WORK
-make -j$(nproc)
-make install
+meson setup build --prefix=$WORK --libdir=lib --default-library=static --buildtype=debugoptimized \
+  -Djpeg=disabled -Dtiff=disabled
+meson install -C build --tag devel
 popd
 
 # aom
@@ -44,6 +53,7 @@ mkdir -p build/linux
 cd build/linux
 extra_libaom_flags='-DAOM_MAX_ALLOCABLE_MEMORY=536870912 -DDO_RANGE_CHECK_CLAMP=1'
 cmake \
+  -GNinja \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DCMAKE_INSTALL_PREFIX=$WORK \
   -DCONFIG_PIC=1 \
@@ -58,59 +68,43 @@ cmake \
   -DAOM_EXTRA_CXX_FLAGS="$extra_libaom_flags" \
   -DAOM_TARGET_CPU=generic \
   ../../
-make clean
-make -j$(nproc)
-make install
+cmake --build . --target install
 popd
 
 # libheif
 pushd $SRC/libheif
-# Ensure libvips finds heif_image_handle_get_raw_color_profile
-sed -i '/^Libs.private:/s/-lstdc++/-lc++/' libheif.pc.in
-# Suppress leak warnings from ColorConversionPipeline::init_ops()
-sed -i '/void ColorConversionPipeline::init_ops()/i __attribute__((no_sanitize_address))' libheif/color-conversion/colorconversion.cc
 cmake \
+  -GNinja \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DCMAKE_INSTALL_PREFIX=$WORK \
   -DBUILD_SHARED_LIBS=FALSE \
+  -DBUILD_TESTING=FALSE \
   -DWITH_EXAMPLES=FALSE \
   -DENABLE_PLUGIN_LOADING=FALSE \
   .
-make -j$(nproc)
-make install
+cmake --build . --target install
 popd
 
 # libjpeg-turbo
 pushd $SRC/libjpeg-turbo
 cmake \
+  -GNinja \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DCMAKE_INSTALL_PREFIX=$WORK \
   -DENABLE_STATIC=TRUE \
   -DENABLE_SHARED=FALSE \
   -DWITH_TURBOJPEG=FALSE \
   .
-make -j$(nproc)
-make install
-popd
-
-# libpng
-pushd $SRC/libpng
-sed -ie 's/option WARNING /& disabled/' scripts/pnglibconf.dfa
-autoreconf -fi
-./configure \
-  --prefix=$WORK \
-  --disable-shared \
-  --disable-dependency-tracking
-make -j$(nproc)
-make install
+cmake --build . --target jpeg-static
+cmake --install . --component lib
+cmake --install . --component include
 popd
 
 # libspng
 pushd $SRC/libspng
 meson setup build --prefix=$WORK --libdir=lib --default-library=static --buildtype=debugoptimized \
   -Dstatic_zlib=true
-ninja -C build
-ninja -C build install
+meson install -C build --tag devel
 popd
 
 # libwebp
@@ -127,35 +121,35 @@ autoreconf -fi
   --disable-threading \
   --disable-dependency-tracking \
   --prefix=$WORK
-make -j$(nproc)
-make install
+make install bin_PROGRAMS= noinst_PROGRAMS= man_MANS=
 popd
 
-# libtiff ... a bug in libtiff master as of 20 Nov 2019 means we have to 
+# libtiff ... a bug in libtiff master as of 20 Nov 2019 means we have to
 # explicitly disable lzma
 pushd $SRC/libtiff
 autoreconf -fi
 ./configure \
+  --disable-tools \
+  --disable-tests \
+  --disable-contrib \
+  --disable-docs \
   --disable-lzma \
   --disable-shared \
   --disable-dependency-tracking \
   --prefix=$WORK
-make -j$(nproc)
-make install
+make install noinst_PROGRAMS= dist_doc_DATA=
 popd
 
 # libimagequant
 pushd $SRC/libimagequant
 meson setup build --prefix=$WORK --libdir=lib --default-library=static --buildtype=debugoptimized
-ninja -C build
-ninja -C build install
+meson install -C build --tag devel
 popd
 
 # cgif
 pushd $SRC/cgif
 meson setup build --prefix=$WORK --libdir=lib --default-library=static --buildtype=debugoptimized
-ninja -C build
-ninja -C build install
+meson install -C build --tag devel
 popd
 
 # pdfium doesn't need fuzzing, but we want to fuzz the libvips/pdfium link
@@ -167,26 +161,40 @@ popd
 # make a pdfium.pc that libvips can use ... the version number just needs to
 # be higher than 4200 to satisfy libvips
 cat > $WORK/lib/pkgconfig/pdfium.pc << EOF
-  prefix=$WORK
-  exec_prefix=\${prefix}
-  libdir=\${exec_prefix}/lib
-  includedir=\${prefix}/include
-  Name: pdfium
-  Description: pdfium
-  Version: 4901
-  Requires:
-  Libs: -L\${libdir} -lpdfium
-  Cflags: -I\${includedir}
+prefix=$WORK
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
+Name: pdfium
+Description: pdfium
+Version: 4901
+Libs: -L\${libdir} -lpdfium
+Cflags: -I\${includedir}
 EOF
+
+# highway
+pushd $SRC/highway
+cmake \
+  -GNinja \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DCMAKE_INSTALL_PREFIX=$WORK \
+  -DBUILD_SHARED_LIBS=0 \
+  -DBUILD_TESTING=0 \
+  -DHWY_ENABLE_CONTRIB=0 \
+  -DHWY_ENABLE_EXAMPLES=0 \
+  -DHWY_ENABLE_TESTS=0 \
+  .
+cmake --build . --target install
+popd
 
 # libvips
 # Disable building man pages, gettext po files, tools, and tests
 sed -i "/subdir('man')/{N;N;N;d;}" meson.build
-meson setup build --prefix=$WORK --libdir=lib --prefer-static --default-library=static \
-  -Ddeprecated=false -Dexamples=false -Dcplusplus=false -Dmodules=disabled \
+meson setup build --prefix=$WORK --libdir=lib --prefer-static --default-library=static --buildtype=debugoptimized \
+  -Dbackend_max_links=4 -Ddeprecated=false -Dexamples=false -Dcplusplus=false -Dmodules=disabled \
+  -Dfuzzing_engine=oss-fuzz -Dfuzzer_ldflags="$LIB_FUZZING_ENGINE" \
   -Dcpp_link_args="$LDFLAGS -Wl,-rpath=\$ORIGIN/lib"
-ninja -C build
-ninja -C build install
+meson install -C build --tag devel
 
 # Copy fuzz executables to $OUT
 find build/fuzz -maxdepth 1 -executable -type f -exec cp -v '{}' $OUT \;
@@ -195,19 +203,19 @@ find build/fuzz -maxdepth 1 -executable -type f -exec cp -v '{}' $OUT \;
 mkdir -p $OUT/lib
 cp $WORK/lib/*.so $OUT/lib
 
-# Merge the seed corpus in a single directory, exclude files larger than 2k
+# Merge the seed corpus in a single directory, exclude files larger than 4k
 mkdir -p fuzz/corpus
 find \
   $SRC/afl-testcases/{gif*,jpeg*,png,tiff,webp}/full/images \
   fuzz/*_fuzzer_corpus \
   test/test-suite/images \
-  -type f -size -2k \
+  -type f -size -4k \
   -exec bash -c 'hash=($(sha1sum {})); mv {} fuzz/corpus/$hash' \;
 zip -jrq $OUT/seed_corpus.zip fuzz/corpus
 
 # Link corpus
-for fuzzer in fuzz/*_fuzzer.cc; do
-  target=$(basename "$fuzzer" .cc)
+for fuzzer in $OUT/*_fuzzer; do
+  target=$(basename "$fuzzer")
   ln -sf "seed_corpus.zip" "$OUT/${target}_seed_corpus.zip"
 done
 

@@ -213,9 +213,9 @@ VOption::set(const char *name, std::vector<int> value)
 	pair->input = true;
 
 	g_value_init(&pair->value, VIPS_TYPE_ARRAY_INT);
-	vips_value_set_array_int(&pair->value, NULL,
+	vips_value_set_array_int(&pair->value, nullptr,
 		static_cast<int>(value.size()));
-	array = vips_value_get_array_int(&pair->value, NULL);
+	array = vips_value_get_array_int(&pair->value, nullptr);
 
 	for (std::vector<double>::size_type i = 0; i < value.size(); i++)
 		array[i] = value[i];
@@ -236,9 +236,9 @@ VOption::set(const char *name, std::vector<double> value)
 	pair->input = true;
 
 	g_value_init(&pair->value, VIPS_TYPE_ARRAY_DOUBLE);
-	vips_value_set_array_double(&pair->value, NULL,
+	vips_value_set_array_double(&pair->value, nullptr,
 		static_cast<int>(value.size()));
-	array = vips_value_get_array_double(&pair->value, NULL);
+	array = vips_value_get_array_double(&pair->value, nullptr);
 
 	for (std::vector<double>::size_type i = 0; i < value.size(); i++)
 		array[i] = value[i];
@@ -261,7 +261,7 @@ VOption::set(const char *name, std::vector<VImage> value)
 	g_value_init(&pair->value, VIPS_TYPE_ARRAY_IMAGE);
 	vips_value_set_array_image(&pair->value,
 		static_cast<int>(value.size()));
-	array = vips_value_get_array_image(&pair->value, NULL);
+	array = vips_value_get_array_image(&pair->value, nullptr);
 
 	for (std::vector<double>::size_type i = 0; i < value.size(); i++) {
 		VipsImage *vips_image = value[i].get_image();
@@ -402,7 +402,7 @@ set_property(VipsObject *object, const char *name, const GValue *value)
 		GType pspec_type = G_PARAM_SPEC_VALUE_TYPE(pspec);
 
 		int enum_value;
-		GValue value2 = { 0 };
+		GValue value2 = G_VALUE_INIT;
 
 		if ((enum_value = vips_enum_from_nick(object_class->nickname,
 				 pspec_type, g_value_get_string(value))) < 0) {
@@ -554,7 +554,7 @@ VImage::call_option_string(const char *operation_name,
 void
 VImage::call(const char *operation_name, VOption *options)
 {
-	call_option_string(operation_name, NULL, options);
+	call_option_string(operation_name, nullptr, options);
 }
 
 VImage
@@ -595,7 +595,7 @@ VImage::new_from_buffer(const void *buf, size_t len, const char *option_string,
 
 	/* We don't take a copy of the data or free it.
 	 */
-	blob = vips_blob_new(NULL, buf, len);
+	blob = vips_blob_new(nullptr, buf, len);
 	options = (options ? options : VImage::option())
 				  ->set("buffer", blob)
 				  ->set("out", &out);
@@ -637,7 +637,7 @@ VImage::new_from_source(VSource source, const char *option_string,
 }
 
 VImage
-VImage::new_from_memory_steal(void *data, size_t size,
+VImage::new_from_memory_steal(const void *data, size_t size,
 	int width, int height, int bands, VipsBandFormat format)
 {
 	VipsImage *image;
@@ -647,7 +647,7 @@ VImage::new_from_memory_steal(void *data, size_t size,
 		throw(VError());
 
 	g_signal_connect(image, "postclose",
-		G_CALLBACK(vips_image_free_buffer), data);
+		G_CALLBACK(vips_image_free_buffer), const_cast<void *>(data));
 
 	return VImage(image);
 }
@@ -732,7 +732,7 @@ VImage::write_to_buffer(const char *suffix, void **buf, size_t *size,
 				->set("in", *this)
 				->set("target", target));
 
-		g_object_get(target.get_target(), "blob", &blob, (void *) NULL);
+		g_object_get(target.get_target(), "blob", &blob, nullptr);
 	}
 	else if ((operation_name = vips_foreign_find_save_buffer(filename))) {
 		call_option_string(operation_name, option_string,
@@ -748,7 +748,7 @@ VImage::write_to_buffer(const char *suffix, void **buf, size_t *size,
 	if (blob) {
 		if (buf) {
 			*buf = VIPS_AREA(blob)->data;
-			VIPS_AREA(blob)->free_fn = NULL;
+			VIPS_AREA(blob)->free_fn = nullptr;
 		}
 		if (size)
 			*size = VIPS_AREA(blob)->length;
@@ -785,7 +785,7 @@ VImage::thumbnail_buffer(void *buf, size_t len, int width, VOption *options)
 
 	/* We don't take a copy of the data or free it.
 	 */
-	blob = vips_blob_new(NULL, buf, len);
+	blob = vips_blob_new(nullptr, buf, len);
 	options = (options ? options : VImage::option())->set("buffer", blob)->set("width", width)->set("out", &out);
 	vips_area_unref(VIPS_AREA(blob));
 
@@ -999,8 +999,7 @@ operator-=(VImage &a, const std::vector<double> b)
 VImage
 operator-(const VImage a)
 {
-	a * -1;
-	return a;
+	return a * -1;
 }
 
 VImage
@@ -1591,6 +1590,22 @@ operator>>=(VImage &a, const std::vector<double> b)
 {
 	a = a << b;
 	return a;
+}
+
+// Compat operations
+
+VImage
+VImage::new_from_memory_steal(void *data, size_t size,
+	int width, int height, int bands, VipsBandFormat format)
+{
+	return new_from_memory_steal(static_cast<const void *>(data), size,
+		width, height, bands, format);
+}
+
+void
+VImage::rawsave_fd(int fd, VOption *options) const
+{
+	rawsave_target(VTarget::new_to_descriptor(fd), options);
 }
 
 VIPS_NAMESPACE_END

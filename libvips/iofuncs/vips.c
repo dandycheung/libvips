@@ -506,7 +506,7 @@ vips__has_extension_block(VipsImage *im)
 /* Read everything after the pixels into memory.
  */
 void *
-vips__read_extension_block(VipsImage *im, int *size)
+vips__read_extension_block(VipsImage *im, size_t *size)
 {
 	gint64 psize;
 	void *buf;
@@ -515,8 +515,7 @@ vips__read_extension_block(VipsImage *im, int *size)
 	g_assert(im->file_length > 0);
 	if (im->file_length - psize > 100 * 1024 * 1024) {
 		vips_error("VipsImage",
-			"%s", _("more than 100 megabytes of XML? "
-					"sufferin' succotash!"));
+			"%s", _("more than 100 megabytes of XML? sufferin' succotash!"));
 		return NULL;
 	}
 	if (im->file_length - psize == 0)
@@ -617,9 +616,9 @@ parser_element_start_handler(void *user_data,
 	if (strcmp(name, "field") == 0) {
 		for (p = atts; *p; p += 2) {
 			if (strcmp(p[0], "name") == 0)
-				vips_strncpy(vep->name, p[1], MAX_PARSE_ATTR);
+				g_strlcpy(vep->name, p[1], MAX_PARSE_ATTR);
 			if (strcmp(p[0], "type") == 0)
-				vips_strncpy(vep->type, p[1], MAX_PARSE_ATTR);
+				g_strlcpy(vep->type, p[1], MAX_PARSE_ATTR);
 		}
 
 		vips_dbuf_reset(&vep->dbuf);
@@ -671,8 +670,8 @@ set_history(VipsImage *im, char *history)
 static int
 set_meta(VipsImage *image, GType gtype, const char *name, const char *data)
 {
-	GValue save_value = { 0 };
-	GValue value = { 0 };
+	GValue save_value = G_VALUE_INIT;
+	GValue value = G_VALUE_INIT;
 
 	g_value_init(&save_value, VIPS_TYPE_SAVE_STRING);
 	vips_value_set_save_string(&save_value, data);
@@ -743,8 +742,9 @@ parser_data_handler(void *user_data, const XML_Char *data, int len)
 static int
 readhist(VipsImage *im)
 {
+	VipsExpatParse vep = { 0 };
+
 	XML_Parser parser;
-	VipsExpatParse vep;
 
 	if (vips__seek(im->fd, image_pixel_length(im), SEEK_SET) == -1)
 		return -1;
@@ -752,8 +752,6 @@ readhist(VipsImage *im)
 	parser = XML_ParserCreate("UTF-8");
 
 	vep.image = im;
-	vips_dbuf_init(&vep.dbuf);
-	vep.error = FALSE;
 	XML_SetUserData(parser, &vep);
 
 	XML_SetElementHandler(parser,
@@ -774,7 +772,7 @@ readhist(VipsImage *im)
 }
 
 int
-vips__write_extension_block(VipsImage *im, void *buf, int size)
+vips__write_extension_block(VipsImage *im, void *buf, size_t size)
 {
 	gint64 length;
 	gint64 psize;
@@ -794,7 +792,7 @@ vips__write_extension_block(VipsImage *im, void *buf, int size)
 		return -1;
 
 #ifdef DEBUG
-	printf("vips__write_extension_block: written %d bytes of XML to %s\n",
+	printf("vips__write_extension_block: written %zd bytes of XML to %s\n",
 		size, im->filename);
 #endif /*DEBUG*/
 
@@ -823,14 +821,14 @@ build_xml_meta(VipsMeta *meta, VipsTarget *target, void *b)
 {
 	GType type = G_VALUE_TYPE(&meta->value);
 
-	const char *str;
+	char *str;
 
 	/* If we can transform to VIPS_TYPE_SAVE_STRING and back, we can save
 	 * and restore.
 	 */
 	if (g_value_type_transformable(type, VIPS_TYPE_SAVE_STRING) &&
 		g_value_type_transformable(VIPS_TYPE_SAVE_STRING, type)) {
-		GValue save_value = { 0 };
+		GValue save_value = G_VALUE_INIT;
 
 		g_value_init(&save_value, VIPS_TYPE_SAVE_STRING);
 		if (!g_value_transform(&meta->value, &save_value)) {
@@ -842,8 +840,9 @@ build_xml_meta(VipsMeta *meta, VipsTarget *target, void *b)
 		/* We need to validate the str to make sure we'll be able to
 		 * read it back.
 		 */
-		str = vips_value_get_save_string(&save_value);
-		if (g_utf8_validate(str, -1, NULL)) {
+		str = g_utf8_make_valid(vips_value_get_save_string(&save_value), -1);
+
+		if (str) {
 			vips_target_writef(target,
 				"    <field type=\"%s\" name=\"",
 				g_type_name(type));
@@ -851,6 +850,8 @@ build_xml_meta(VipsMeta *meta, VipsTarget *target, void *b)
 			vips_target_writes(target, "\">");
 			vips_target_write_amp(target, str);
 			vips_target_writes(target, "</field>\n");
+
+			g_free(str);
 		}
 
 		g_value_unset(&save_value);
@@ -918,7 +919,7 @@ vips__xml_properties_meta(VipsImage *image,
 	 */
 	if (g_value_type_transformable(type, VIPS_TYPE_SAVE_STRING) &&
 		g_value_type_transformable(VIPS_TYPE_SAVE_STRING, type)) {
-		GValue save_value = { 0 };
+		GValue save_value = G_VALUE_INIT;
 
 		g_value_init(&save_value, VIPS_TYPE_SAVE_STRING);
 		if (!g_value_transform(value, &save_value)) {

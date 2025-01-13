@@ -102,7 +102,7 @@ static VipsThreadset *vips__threadset = NULL;
 
 /* Set this GPrivate to link a thread back to its VipsWorker struct.
  */
-static GPrivate *worker_key = NULL;
+static GPrivate worker_key;
 
 /* Maximum value we allow for VIPS_CONCURRENCY. We need to stop huge values
  * killing the system.
@@ -114,16 +114,12 @@ static GPrivate *worker_key = NULL;
 void
 vips__threadpool_init(void)
 {
-	static GPrivate private = { 0 };
-
 	/* 3 is the useful minimum, and huge values can crash the machine.
 	 */
 	const char *max_threads_env = g_getenv("VIPS_MAX_THREADS");
 	int max_threads = max_threads_env
 		? VIPS_CLIP(3, atoi(max_threads_env), MAX_THREADS)
 		: 0;
-
-	worker_key = &private;
 
 	if (g_getenv("VIPS_STALL"))
 		vips__stall = TRUE;
@@ -142,9 +138,9 @@ vips__threadpool_shutdown(void)
 }
 
 /**
- * vips__thread_execute:
+ * vips_thread_execute:
  * @name: a name for the thread
- * @func: a function to execute in the global threadset
+ * @func: a function to execute in the libvips threadset
  * @data: an argument to supply to @func
  *
  * A newly created or reused thread will execute @func with the
@@ -153,7 +149,7 @@ vips__threadpool_shutdown(void)
  * Returns: 0 on success, -1 on error.
  */
 int
-vips__thread_execute(const char *domain, GFunc func, gpointer data)
+vips_thread_execute(const char *domain, GFunc func, gpointer data)
 {
 	return vips_threadset_run(vips__threadset, domain, func, data);
 }
@@ -272,7 +268,12 @@ typedef struct _VipsThreadpool {
 	/* The number of workers queueing up on allocate_lock. Use this to
 	 * grow and shrink the threadpool.
 	 */
-	int n_waiting;
+	int n_waiting; // (atomic)
+
+	/* Increment this and the next worker will decrement and exit if needed
+	 * (used to downsize the threadpool).
+	 */
+	int exit; // (atomic)
 
 	/* Set this to abort evaluation early with an error.
 	 */
@@ -281,11 +282,6 @@ typedef struct _VipsThreadpool {
 	/* Ask threads to exit, either set by allocate, or on free.
 	 */
 	gboolean stop;
-
-	/* Set this and the next worker to see it will clear the flag and exit
-	 * (used to downsize the threadpool).
-	 */
-	int exit;
 } VipsThreadpool;
 
 static int
@@ -307,9 +303,6 @@ vips_worker_allocate(VipsWorker *worker)
 
 /* Run this once per main loop. Get some work (single-threaded), then do it
  * (many-threaded).
- *
- * The very first workunit is also executed single-threaded. This gives
- * loaders a change to seek to the correct spot, see vips_sequential().
  */
 static void
 vips_worker_work_unit(VipsWorker *worker)
@@ -344,7 +337,7 @@ vips_worker_work_unit(VipsWorker *worker)
 		/* No one had been asked to exit and we've mistakenly taken
 		 * the exit count below zero. Put it back up again.
 		 */
-		g_atomic_int_add(&pool->exit, 1);
+		g_atomic_int_inc(&pool->exit);
 	}
 
 	if (vips_worker_allocate(worker)) {
@@ -395,7 +388,7 @@ vips_thread_main_loop(void *a, void *b)
 
 	VIPS_GATE_START("vips_thread_main_loop: thread");
 
-	g_private_set(worker_key, worker);
+	g_private_set(&worker_key, worker);
 
 	/* Process work units! Always tick, even if we are stopping, so the
 	 * main thread will wake up for exit.
@@ -421,7 +414,7 @@ vips_thread_main_loop(void *a, void *b)
 	g_mutex_unlock(pool->allocate_lock);
 
 	VIPS_FREE(worker);
-	g_private_set(worker_key, NULL);
+	g_private_set(&worker_key, NULL);
 
 	/* We are done: tell the main thread.
 	 */
@@ -445,8 +438,7 @@ vips_worker_new(VipsThreadpool *pool)
 	 * owned by the correct thread.
 	 */
 
-	if (vips__thread_execute("worker",
-			vips_thread_main_loop, worker)) {
+	if (vips_thread_execute("worker", vips_thread_main_loop, worker)) {
 		g_free(worker);
 		return -1;
 	}
@@ -461,13 +453,34 @@ vips_worker_new(VipsThreadpool *pool)
 void
 vips__worker_lock(GMutex *mutex)
 {
-	VipsWorker *worker = (VipsWorker *) g_private_get(worker_key);
+	VipsWorker *worker = (VipsWorker *) g_private_get(&worker_key);
 
 	if (worker)
-		g_atomic_int_add(&worker->pool->n_waiting, 1);
+		g_atomic_int_inc(&worker->pool->n_waiting);
 	g_mutex_lock(mutex);
 	if (worker)
-		g_atomic_int_add(&worker->pool->n_waiting, -1);
+		g_atomic_int_dec_and_test(&worker->pool->n_waiting);
+}
+
+void
+vips__worker_cond_wait(GCond *cond, GMutex *mutex)
+{
+	VipsWorker *worker = (VipsWorker *) g_private_get(&worker_key);
+
+	if (worker)
+		g_atomic_int_inc(&worker->pool->n_waiting);
+	g_cond_wait(cond, mutex);
+	if (worker)
+		g_atomic_int_dec_and_test(&worker->pool->n_waiting);
+}
+
+static void
+vips_threadpool_wait(VipsThreadpool *pool)
+{
+	/* Wait for them all to exit.
+	 */
+	pool->stop = TRUE;
+	vips_semaphore_downn(&pool->n_workers, 0);
 }
 
 static void
@@ -476,10 +489,7 @@ vips_threadpool_free(VipsThreadpool *pool)
 	VIPS_DEBUG_MSG("vips_threadpool_free: \"%s\" (%p)\n",
 		pool->im->filename, pool);
 
-	/* Wait for them all to exit.
-	 */
-	pool->stop = TRUE;
-	vips_semaphore_downn(&pool->n_workers, 0);
+	vips_threadpool_wait(pool);
 
 	VIPS_FREEF(vips_g_mutex_free, pool->allocate_lock);
 	vips_semaphore_destroy(&pool->n_workers);
@@ -692,7 +702,7 @@ vips_threadpool_run(VipsImage *im,
 		if (n_waiting > 3 &&
 			n_working > 1) {
 			VIPS_DEBUG_MSG("shrinking thread pool\n");
-			g_atomic_int_add(&pool->exit, 1);
+			g_atomic_int_inc(&pool->exit);
 			n_working -= 1;
 		}
 		else if (n_waiting < 2 &&
@@ -706,18 +716,23 @@ vips_threadpool_run(VipsImage *im,
 		}
 	}
 
+	/* This will block until the last worker completes.
+	 */
+	vips_threadpool_wait(pool);
+
 	/* Return 0 for success.
 	 */
 	result = pool->error ? -1 : 0;
 
-	/* This will block until the last worker completes.
-	 */
 	vips_threadpool_free(pool);
 
 	if (!vips_image_get_concurrency(im, 0))
 		g_info("threadpool completed with %d workers", n_working);
 
-	vips_image_minimise_all(im);
+	/* "minimise" is only emitted for top-level threadpools.
+	 */
+	if (!vips_image_get_typeof(im, "vips-no-minimise"))
+		vips_image_minimise_all(im);
 
 	return result;
 }

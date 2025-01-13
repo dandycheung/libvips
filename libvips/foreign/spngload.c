@@ -196,7 +196,7 @@ vips_foreign_load_png_set_text(VipsImage *out,
 		/* Save as a string comment. Some PNGs have EXIF data as
 		 * text segments, unfortunately.
 		 */
-		vips_snprintf(name, 256, "png-comment-%d-%s", i, key);
+		g_snprintf(name, 256, "png-comment-%d-%s", i, key);
 
 		vips_image_set_string(out, name, value);
 	}
@@ -274,11 +274,14 @@ vips_foreign_load_png_set_header(VipsForeignLoadPng *png, VipsImage *image)
 	vips_image_set_int(image, VIPS_META_BITS_PER_SAMPLE,
 		png->ihdr.bit_depth);
 
-	/* Deprecated "palette-bit-depth" use "bits-per-sample" instead.
-	 */
-	if (png->ihdr.color_type == SPNG_COLOR_TYPE_INDEXED)
+	if (png->ihdr.color_type == SPNG_COLOR_TYPE_INDEXED) {
+		/* Deprecated "palette-bit-depth" use "bits-per-sample" instead.
+		 */
 		vips_image_set_int(image,
 			"palette-bit-depth", png->ihdr.bit_depth);
+
+		vips_image_set_int(image, VIPS_META_PALETTE, 1);
+	}
 
 	/* Let our caller know. These are very expensive to decode.
 	 */
@@ -337,10 +340,10 @@ vips_foreign_load_png_header(VipsForeignLoad *load)
 	/* In non-fail mode, ignore CRC errors.
 	 */
 	flags = 0;
-	if (load->fail_on >= VIPS_FAIL_ON_ERROR)
+	if (load->fail_on < VIPS_FAIL_ON_ERROR)
 		flags |= SPNG_CTX_IGNORE_ADLER32;
 	png->ctx = spng_ctx_new(flags);
-	if (load->fail_on >= VIPS_FAIL_ON_ERROR)
+	if (load->fail_on < VIPS_FAIL_ON_ERROR)
 		/* Ignore and don't calculate checksums.
 		 */
 		spng_set_crc_action(png->ctx, SPNG_CRC_USE, SPNG_CRC_USE);
@@ -670,12 +673,14 @@ vips_foreign_load_png_class_init(VipsForeignLoadPngClass *class)
 	load_class->header = vips_foreign_load_png_header;
 	load_class->load = vips_foreign_load_png_load;
 
+#ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
 	VIPS_ARG_BOOL(class, "unlimited", 23,
 		_("Unlimited"),
 		_("Remove all denial of service limits"),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET(VipsForeignLoadPng, unlimited),
 		FALSE);
+#endif
 }
 
 static void

@@ -1,14 +1,18 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
-# This file generates the member definitions and declarations for all vips 
+# This file generates the member definitions and declarations for all vips
 # operators.
 
 # this needs pyvips
 #
 #   pip install --user pyvips
 
+# Rebuild with:
+#   meson compile -Cbuild vips-operators-header
+#   meson compile -Cbuild vips-operators-source
+
 # Sample member declaration:
-# VImage invert(VOption *options = 0) const;
+# VImage invert(VOption *options = nullptr) const;
 
 # Sample member definition:
 # VImage
@@ -35,7 +39,6 @@ gtype_to_cpp = {
     GValue.gdouble_type: 'double',
     GValue.gstr_type: 'const char *',
     GValue.refstr_type: 'char *',
-    GValue.gflags_type: 'int',
     GValue.image_type: 'VImage',
     GValue.source_type: 'VSource',
     GValue.target_type: 'VTarget',
@@ -69,8 +72,8 @@ def get_cpp_type(gtype):
 
     fundamental = gobject_lib.g_type_fundamental(gtype)
 
-    # enum params use the C name as their name
-    if fundamental == GValue.genum_type:
+    # enum/flag params use the C name as their name
+    if fundamental == GValue.genum_type or fundamental == GValue.gflags_type:
         return type_name(gtype)
 
     if fundamental in gtype_to_cpp:
@@ -87,7 +90,7 @@ def cppize(name):
 def generate_operation(operation_name, declaration_only=False, indent=''):
     intro = Introspect.get(operation_name)
 
-    required_output = [name 
+    required_output = [name
         for name in intro.required_output if name != intro.member_x]
 
     # We are only interested in non-deprecated arguments
@@ -129,6 +132,8 @@ def generate_operation(operation_name, declaration_only=False, indent=''):
             result += f'\n{indent} * @return {details["blurb"]}.'
 
         result += f'\n{indent} */\n'
+        if intro.flags & _OPERATION_DEPRECATED:
+            result += f'{indent}G_DEPRECATED\n'
     else:
         result = '\n'
 
@@ -171,7 +176,7 @@ def generate_operation(operation_name, declaration_only=False, indent=''):
             spacing = '' if cpp_type.endswith(cplusplus_suffixes) else ' '
             result += f'{cpp_type}{spacing}*{cppize(name)}, '
 
-    result += f'VOption *options{" = 0" if declaration_only else ""})'
+    result += f'VOption *options{" = nullptr" if declaration_only else ""})'
 
     # if no 'this' available, it's a class method and they are all const
     if intro.member_x is not None:
@@ -223,15 +228,24 @@ def generate_operation(operation_name, declaration_only=False, indent=''):
 def generate_operators(declarations_only=False):
     all_nicknames = []
 
+    # hidden CLI savers needs to be excluded from the API
+    hidden_savers = [
+        'avifsave_target',
+        'magicksave_bmp',
+        'magicksave_bmp_buffer',
+        'pbmsave_target',
+        'pfmsave_target',
+        'pgmsave_target',
+        'pnmsave_target',
+    ]
+
     def add_nickname(gtype, a, b):
         nickname = nickname_find(gtype)
         try:
             # can fail for abstract types
-            intro = Introspect.get(nickname)
+            _ = Introspect.get(nickname)
 
-            # we are only interested in non-deprecated operations
-            if (intro.flags & _OPERATION_DEPRECATED) == 0:
-                all_nicknames.append(nickname)
+            all_nicknames.append(nickname)
         except Error:
             pass
 
@@ -245,7 +259,7 @@ def generate_operators(declarations_only=False):
     all_nicknames.append('crop')
 
     # make list unique and sort
-    all_nicknames = list(set(all_nicknames))
+    all_nicknames = list(set(all_nicknames) - set(hidden_savers))
     all_nicknames.sort()
 
     for nickname in all_nicknames:

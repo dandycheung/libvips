@@ -110,7 +110,7 @@ vips_scRGB2sRGB_line_8(VipsPel *restrict q, float *restrict p,
 		q += 3;
 
 		for (j = 0; j < extra_bands; j++)
-			q[j] = VIPS_CLIP(0, p[j], UCHAR_MAX);
+			q[j] = VIPS_CLIP(0, (int) (p[j] * 255.0), UCHAR_MAX);
 		p += extra_bands;
 		q += extra_bands;
 	}
@@ -140,7 +140,7 @@ vips_scRGB2sRGB_line_16(unsigned short *restrict q, float *restrict p,
 		q += 3;
 
 		for (j = 0; j < extra_bands; j++)
-			q[j] = VIPS_CLIP(0, (int) (p[j] * 256.0), USHRT_MAX);
+			q[j] = VIPS_CLIP(0, (int) (p[j] * 65535.0), USHRT_MAX);
 		p += extra_bands;
 		q += extra_bands;
 	}
@@ -201,6 +201,14 @@ vips_scRGB2sRGB_build(VipsObject *object)
 	if (vips_check_bands_atleast(class->nickname, in, 3))
 		return -1;
 
+	// we are changing the gamma, so any profile on the image can no longer
+	// work (and will cause horrible problems in any downstream colour
+	// handling)
+	if (vips_copy(in, &t[0], NULL))
+		return -1;
+	in = t[0];
+	vips_image_remove(in, VIPS_META_ICC_NAME);
+
 	switch (scRGB2sRGB->depth) {
 	case 16:
 		interpretation = VIPS_INTERPRETATION_RGB16;
@@ -213,14 +221,13 @@ vips_scRGB2sRGB_build(VipsObject *object)
 		break;
 
 	default:
-		vips_error(class->nickname,
-			"%s", _("depth must be 8 or 16"));
+		vips_error(class->nickname, "%s", _("depth must be 8 or 16"));
 		return -1;
 	}
 
-	if (vips_cast_float(in, &t[0], NULL))
+	if (vips_cast_float(in, &t[1], NULL))
 		return -1;
-	in = t[0];
+	in = t[1];
 
 	out = vips_image_new();
 	if (vips_image_pipelinev(out,

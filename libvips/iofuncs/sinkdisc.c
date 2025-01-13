@@ -98,6 +98,20 @@ typedef struct _Write {
 	void *a;
 } Write;
 
+static int
+write_check_error(Write *write)
+{
+	if (write->buf->write_errno ||
+		write->buf_back->write_errno) {
+		vips_error_system(write->buf->write_errno ?
+			write->buf->write_errno : write->buf_back->write_errno,
+			"wbuffer_write", "%s", _("write failed"));
+		return -1;
+	}
+
+	return 0;
+}
+
 /* Our per-thread state ... we need to also track the buffer that pos is
  * supposed to write to.
  */
@@ -236,8 +250,7 @@ wbuffer_new(Write *write)
 
 	/* Make this last (picks up parts of wbuffer on startup).
 	 */
-	if (vips__thread_execute("wbuffer", wbuffer_write_thread,
-			wbuffer)) {
+	if (vips_thread_execute("wbuffer", wbuffer_write_thread, wbuffer)) {
 		wbuffer_free(wbuffer);
 		return NULL;
 	}
@@ -260,13 +273,8 @@ wbuffer_flush(Write *write)
 	if (write->buf->area.top > 0) {
 		vips_semaphore_down(&write->buf_back->done);
 
-		/* Previous write succeeded?
-		 */
-		if (write->buf_back->write_errno) {
-			vips_error_system(write->buf_back->write_errno,
-				"wbuffer_write", "%s", _("write failed"));
+		if (write_check_error(write))
 			return -1;
-		}
 	}
 
 	/* Set the background writer going for this buffer.
@@ -372,10 +380,11 @@ wbuffer_allocate_fn(VipsThreadState *state, void *a, gboolean *stop)
 				return -1;
 			}
 
-			/* This will be the first tile of a new buffer ...
-			 * stall for a moment to stress the caching system.
+			/* This will be the first tile of a new buffer ... mark this as a
+			 * good place to stall for a moment if we want to stress the
+			 * caching system. See threadpool.c.
 			 */
-			state->stall = TRUE;
+            state->stall = TRUE;
 		}
 	}
 
@@ -532,6 +541,10 @@ vips_sink_disc(VipsImage *im, VipsRegionWrite write_fn, void *a)
 		vips_semaphore_down(&write.buf->done);
 
 	vips_image_posteval(im);
+
+	/* The final write might have failed, pick up any error code.
+	 */
+	result |= write_check_error(&write);
 
 	write_free(&write);
 

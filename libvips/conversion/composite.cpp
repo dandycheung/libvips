@@ -356,10 +356,7 @@ vips_composite_base_max_band(VipsCompositeBase *composite, double *max_band)
 	double max_alpha;
 	int b;
 
-	max_alpha = 255.0;
-	if (composite->compositing_space == VIPS_INTERPRETATION_GREY16 ||
-		composite->compositing_space == VIPS_INTERPRETATION_RGB16)
-		max_alpha = 65535.0;
+	max_alpha = vips_interpretation_max_alpha(composite->compositing_space);
 
 	for (b = 0; b <= composite->bands; b++)
 		max_band[b] = max_alpha;
@@ -586,7 +583,7 @@ vips_composite_base_blend(VipsCompositeBase *composite,
 
 	case VIPS_BLEND_MODE_DEST_ATOP:
 		aR = aA;
-		t1 = 1 - aA;
+		t1 = 1 - aB;
 		for (int b = 0; b < bands; b++)
 			B[b] = t1 * A[b] + B[b];
 		break;
@@ -830,7 +827,7 @@ vips_composite_base_blend3(VipsCompositeSequence *seq,
 
 	case VIPS_BLEND_MODE_DEST_ATOP:
 		aR = aA;
-		t1 = 1 - aA;
+		t1 = 1 - aB;
 		B = t1 * A + B;
 		break;
 
@@ -867,7 +864,7 @@ vips_composite_base_blend3(VipsCompositeSequence *seq,
 			break;
 
 		case VIPS_BLEND_MODE_OVERLAY:
-			f = B <= 0.5
+			f = B <= 0.5f
 				? 2 * A * B
 				: 1 - 2 * (1 - A) * (1 - B);
 			break;
@@ -893,7 +890,7 @@ vips_composite_base_blend3(VipsCompositeSequence *seq,
 			break;
 
 		case VIPS_BLEND_MODE_HARD_LIGHT:
-			f = A <= 0.5
+			f = A <= 0.5f
 				? 2 * A * B
 				: 1 - 2 * (1 - A) * (1 - B);
 			break;
@@ -1362,7 +1359,7 @@ vips_composite_base_build(VipsObject *object)
 		if (!vips_image_hasalpha(in[i])) {
 			VipsImage *x;
 
-			if (vips_addalpha(in[i], &x, (void *) NULL))
+			if (vips_addalpha(in[i], &x, nullptr))
 				return -1;
 			g_object_unref(in[i]);
 			in[i] = x;
@@ -1403,7 +1400,7 @@ vips_composite_base_build(VipsObject *object)
 		vips_object_local_array(object, n);
 	for (int i = 0; i < n; i++)
 		if (vips_colourspace(in[i], &compositing[i],
-				composite->compositing_space, (void *) NULL))
+				composite->compositing_space, nullptr))
 			return -1;
 	in = compositing;
 
@@ -1540,8 +1537,7 @@ vips_composite_build(VipsObject *object)
 
 	if (vips_object_argument_isset(object, "x")) {
 		if (composite->x->area.n != n - 1) {
-			vips_error(klass->nickname,
-				_("must be %d x coordinates"), n - 1);
+			vips_error(klass->nickname, _("must be %d x coordinates"), n - 1);
 			return -1;
 		}
 		base->x_offset = (int *) composite->x->area.data;
@@ -1549,8 +1545,7 @@ vips_composite_build(VipsObject *object)
 
 	if (vips_object_argument_isset(object, "y")) {
 		if (composite->y->area.n != n - 1) {
-			vips_error(klass->nickname,
-				_("must be %d y coordinates"), n - 1);
+			vips_error(klass->nickname, _("must be %d y coordinates"), n - 1);
 			return -1;
 		}
 		base->y_offset = (int *) composite->y->area.data;

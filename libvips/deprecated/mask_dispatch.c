@@ -1,4 +1,4 @@
-/* VIPS function dispatch tables for matricies.
+/* VIPS function dispatch tables for matrices.
  *
  * J. Cupitt, 14/2/95.
  */
@@ -38,7 +38,6 @@
 #include <stdio.h>
 
 #include <vips/vips.h>
-#include <vips/vips7compat.h>
 
 /* One matrix in, one out.
  */
@@ -47,7 +46,7 @@ static im_arg_desc one_in_one_out[] = {
 	IM_OUTPUT_DMASK("out")
 };
 
-/* Two matricies in, one out.
+/* Two matrices in, one out.
  */
 static im_arg_desc two_in_one_out[] = {
 	IM_INPUT_DMASK("in1"),

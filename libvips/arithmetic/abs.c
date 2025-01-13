@@ -80,38 +80,10 @@ typedef VipsUnaryClass VipsAbsClass;
 
 G_DEFINE_TYPE(VipsAbs, vips_abs, VIPS_TYPE_UNARY);
 
-static void *
-vips_abs_orc_init_cb(void *a)
-{
-	VipsAbs *abs = (VipsAbs *) a;
-	VipsArithmeticClass *aclass = VIPS_ARITHMETIC_GET_CLASS(abs);
-
-	VipsVector *v;
-
-	vips_arithmetic_set_vector(aclass);
-
-	v = vips_arithmetic_get_program(aclass, VIPS_FORMAT_CHAR);
-	vips_vector_asm2(v, "absb", "d1", "s1");
-
-	v = vips_arithmetic_get_program(aclass, VIPS_FORMAT_SHORT);
-	vips_vector_asm2(v, "absw", "d1", "s1");
-
-	v = vips_arithmetic_get_program(aclass, VIPS_FORMAT_INT);
-	vips_vector_asm2(v, "absl", "d1", "s1");
-
-	vips_arithmetic_compile(aclass);
-
-	return NULL;
-}
-
 static int
 vips_abs_build(VipsObject *object)
 {
-	static GOnce once = G_ONCE_INIT;
-
 	VipsUnary *unary = (VipsUnary *) object;
-
-	VIPS_ONCE(&once, vips_abs_orc_init_cb, object);
 
 	if (unary->in &&
 		vips_band_format_isuint(unary->in->BandFmt))
@@ -150,8 +122,6 @@ vips_abs_build(VipsObject *object)
 /* Complex abs operation: calculate modulus.
  */
 
-#ifdef HAVE_HYPOT
-
 #define ABS_COMPLEX(TYPE) \
 	{ \
 		TYPE *restrict p = (TYPE *) in[0]; \
@@ -164,85 +134,39 @@ vips_abs_build(VipsObject *object)
 		} \
 	}
 
-#else /*HAVE_HYPOT*/
-
-#define ABS_COMPLEX(TYPE) \
-	{ \
-		TYPE *restrict p = (TYPE *) in[0]; \
-		TYPE *restrict q = (TYPE *) out; \
-		int x; \
-\
-		for (x = 0; x < sz; x++) { \
-			double rp = p[0]; \
-			double ip = p[1]; \
-			double abs_rp = VIPS_FABS(rp); \
-			double abs_ip = VIPS_FABS(ip); \
-\
-			if (abs_rp > abs_ip) { \
-				double temp = ip / rp; \
-\
-				q[x] = abs_rp * sqrt(1.0 + temp * temp); \
-			} \
-			else { \
-				double temp = rp / ip; \
-\
-				q[x] = abs_ip * sqrt(1.0 + temp * temp); \
-			} \
-\
-			p += 2; \
-		} \
-	}
-
-#endif /*HAVE_HYPOT*/
-
 static void
 vips_abs_buffer(VipsArithmetic *arithmetic,
 	VipsPel *out, VipsPel **in, int width)
 {
-	VipsArithmeticClass *class = VIPS_ARITHMETIC_GET_CLASS(arithmetic);
 	VipsImage *im = arithmetic->ready[0];
 	const int bands = vips_image_get_bands(im);
 	int sz = width * bands;
 
-	VipsVector *v;
+	switch (vips_image_get_format(im)) {
+	case VIPS_FORMAT_CHAR:
+		ABS_INT(signed char);
+		break;
+	case VIPS_FORMAT_SHORT:
+		ABS_INT(signed short);
+		break;
+	case VIPS_FORMAT_INT:
+		ABS_INT(signed int);
+		break;
+	case VIPS_FORMAT_FLOAT:
+		ABS_FLOAT(float);
+		break;
+	case VIPS_FORMAT_DOUBLE:
+		ABS_FLOAT(double);
+		break;
+	case VIPS_FORMAT_COMPLEX:
+		ABS_COMPLEX(float);
+		break;
+	case VIPS_FORMAT_DPCOMPLEX:
+		ABS_COMPLEX(double);
+		break;
 
-	if ((v = vips_arithmetic_get_vector(class,
-			 vips_image_get_format(im)))) {
-		VipsExecutor ex;
-
-		vips_executor_set_program(&ex, v, sz);
-		vips_executor_set_array(&ex, v->s[0], in[0]);
-		vips_executor_set_destination(&ex, out);
-
-		vips_executor_run(&ex);
-	}
-	else {
-		switch (vips_image_get_format(im)) {
-		case VIPS_FORMAT_CHAR:
-			ABS_INT(signed char);
-			break;
-		case VIPS_FORMAT_SHORT:
-			ABS_INT(signed short);
-			break;
-		case VIPS_FORMAT_INT:
-			ABS_INT(signed int);
-			break;
-		case VIPS_FORMAT_FLOAT:
-			ABS_FLOAT(float);
-			break;
-		case VIPS_FORMAT_DOUBLE:
-			ABS_FLOAT(double);
-			break;
-		case VIPS_FORMAT_COMPLEX:
-			ABS_COMPLEX(float);
-			break;
-		case VIPS_FORMAT_DPCOMPLEX:
-			ABS_COMPLEX(double);
-			break;
-
-		default:
-			g_assert_not_reached();
-		}
+	default:
+		g_assert_not_reached();
 	}
 }
 

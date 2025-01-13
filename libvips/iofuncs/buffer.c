@@ -89,7 +89,9 @@ static const int buffer_cache_max_reserve = 2;
 /* Workers have a BufferThread (and BufferCache) in a GPrivate they have
  * exclusive access to.
  */
-static GPrivate *buffer_thread_key = NULL;
+static void buffer_thread_destroy_notify(gpointer data);
+static GPrivate buffer_thread_key =
+	G_PRIVATE_INIT(buffer_thread_destroy_notify);
 
 void
 vips_buffer_print(VipsBuffer *buffer)
@@ -199,7 +201,7 @@ vips_buffer_dump_all(void)
 static void
 vips_buffer_free(VipsBuffer *buffer)
 {
-	VIPS_FREEF(vips_tracked_free, buffer->buf);
+	VIPS_FREEF(vips_tracked_aligned_free, buffer->buf);
 	buffer->bsize = 0;
 	g_free(buffer);
 
@@ -321,9 +323,9 @@ buffer_thread_get(void)
 		 * will be calling vips_thread_shutdown() on thread
 		 * termination.
 		 */
-		if (!(buffer_thread = g_private_get(buffer_thread_key))) {
+		if (!(buffer_thread = g_private_get(&buffer_thread_key))) {
 			buffer_thread = buffer_thread_new();
-			g_private_set(buffer_thread_key, buffer_thread);
+			g_private_set(&buffer_thread_key, buffer_thread);
 		}
 
 		g_assert(buffer_thread->thread == g_thread_self());
@@ -468,6 +470,7 @@ buffer_move(VipsBuffer *buffer, VipsRect *area)
 {
 	VipsImage *im = buffer->im;
 	size_t new_bsize;
+	size_t align;
 
 	g_assert(buffer->ref_count == 1);
 
@@ -478,11 +481,24 @@ buffer_move(VipsBuffer *buffer, VipsRect *area)
 
 	new_bsize = (size_t) VIPS_IMAGE_SIZEOF_PEL(im) *
 		area->width * area->height;
+
+	/* Need to pad buffer size to be aligned-up to
+	 * 64 bytes for the vips_reduce{h,v} highway path.
+	 */
+#ifdef HAVE_HWY
+	if (im->BandFmt == VIPS_FORMAT_UCHAR) {
+		new_bsize += /*HWY_ALIGNMENT*/ 64 - 1;
+		align = /*HWY_ALIGNMENT*/ 64;
+	}
+	else
+#endif /*HAVE_HWY*/
+		align = 16;
+
 	if (buffer->bsize < new_bsize ||
 		!buffer->buf) {
 		buffer->bsize = new_bsize;
-		VIPS_FREEF(vips_tracked_free, buffer->buf);
-		if (!(buffer->buf = vips_tracked_malloc(buffer->bsize)))
+		VIPS_FREEF(vips_tracked_aligned_free, buffer->buf);
+		if (!(buffer->buf = vips_tracked_aligned_alloc(buffer->bsize, align)))
 			return -1;
 	}
 
@@ -643,7 +659,7 @@ vips_buffer_unref_ref(VipsBuffer *old_buffer, VipsImage *im, VipsRect *area)
 }
 
 static void
-buffer_thread_destroy_notify(VipsBufferThread *buffer_thread)
+buffer_thread_destroy_notify(gpointer data)
 {
 	/* We only come here if vips_thread_shutdown() was not called for this
 	 * thread. Do our best to clean up.
@@ -651,7 +667,7 @@ buffer_thread_destroy_notify(VipsBufferThread *buffer_thread)
 	 * GPrivate has stopped working by this point in destruction, be
 	 * careful not to touch that.
 	 */
-	buffer_thread_free(buffer_thread);
+	buffer_thread_free(data);
 }
 
 /* Init the buffer cache system. This is called during vips_init.
@@ -659,11 +675,6 @@ buffer_thread_destroy_notify(VipsBufferThread *buffer_thread)
 void
 vips__buffer_init(void)
 {
-	static GPrivate private =
-		G_PRIVATE_INIT((GDestroyNotify) buffer_thread_destroy_notify);
-
-	buffer_thread_key = &private;
-
 	if (buffer_cache_max_reserve < 1)
 		printf("vips__buffer_init: buffer reserve disabled\n");
 
@@ -681,8 +692,8 @@ vips__buffer_shutdown(void)
 {
 	VipsBufferThread *buffer_thread;
 
-	if ((buffer_thread = g_private_get(buffer_thread_key))) {
+	if ((buffer_thread = g_private_get(&buffer_thread_key))) {
 		buffer_thread_free(buffer_thread);
-		g_private_set(buffer_thread_key, NULL);
+		g_private_set(&buffer_thread_key, NULL);
 	}
 }

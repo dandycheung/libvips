@@ -1,7 +1,7 @@
-# libvips : an image processing library
+# libvips: an image processing library
 
 [![CI](https://github.com/libvips/libvips/workflows/CI/badge.svg)](https://github.com/libvips/libvips/actions)
-[![Fuzzing Status](https://oss-fuzz-build-logs.storage.googleapis.com/badges/libvips.svg)](https://bugs.chromium.org/p/oss-fuzz/issues/list?sort=-opened&can=2&q=proj:libvips)
+[![Fuzzing Status](https://oss-fuzz-build-logs.storage.googleapis.com/badges/libvips.svg)](https://issues.oss-fuzz.com/issues?q=is:open%20project:libvips)
 [![Coverity Status](https://scan.coverity.com/projects/6503/badge.svg)](https://scan.coverity.com/projects/jcupitt-libvips)
 [![Gitter](https://badges.gitter.im/libvips/devchat.svg)](https://gitter.im/libvips/devchat?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
 
@@ -12,8 +12,8 @@ threaded](https://github.com/libvips/libvips/wiki/Why-is-libvips-quick)
 image processing library. Compared to similar
 libraries, [libvips runs quickly and uses little
 memory](https://github.com/libvips/libvips/wiki/Speed-and-memory-use).
-libvips is licensed under the [LGPL
-2.1+](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.en.html).
+libvips is licensed under the [LGPL-2.1-or-later](
+https://spdx.org/licenses/LGPL-2.1-or-later).
 
 It has around [300
 operations](https://libvips.github.io/libvips/API/current/func-list.html)
@@ -22,7 +22,7 @@ operations, frequency filtering, colour, resampling,
 statistics and others. It supports a large range of [numeric
 types](https://libvips.github.io/libvips/API/current/VipsImage.html#VipsBandFormat),
 from 8-bit int to 128-bit complex. Images can have any number of bands.
-It supports a good range of image formats, including JPEG, JPEG2000, JPEG-XL,
+It supports a good range of image formats, including JPEG, JPEG 2000, JPEG XL,
 TIFF, PNG, WebP, HEIC, AVIF, FITS, Matlab, OpenEXR, PDF, SVG, HDR, PPM / PGM /
 PFM, CSV, GIF, Analyze, NIfTI, DeepZoom, and OpenSlide. It can also load
 images via ImageMagick or GraphicsMagick, letting it work with formats
@@ -45,18 +45,21 @@ Full bindings are available for :
 | Lua | [lua-vips](https://github.com/libvips/lua-vips) |
 | Crystal | [crystal-vips](https://github.com/naqvis/crystal-vips) |
 | Elixir | [vix](https://github.com/akash-akya/vix) |
+| JVM | [vips-ffm](https://github.com/lopcode/vips-ffm) |
 
 libvips is used as an image processing engine by:
 
 | |
 |---|
 | [sharp (on node.js)](https://www.npmjs.org/package/sharp) |
+| [imgproxy](https://github.com/imgproxy/imgproxy) |
 | [bimg](https://github.com/h2non/bimg) |
 | [sharp for Go](https://github.com/DAddYE/vips) |
 | [Ruby on Rails](https://edgeguides.rubyonrails.org/active_storage_overview.html) |
-| [carrierwave-vips](https://github.com/eltiare/carrierwave-vips) |
+| [CarrierWave](https://github.com/carrierwaveuploader/carrierwave#using-vips) |
 | [mediawiki](https://www.mediawiki.org/wiki/Extension:VipsScaler) |
 | [PhotoFlow](https://github.com/aferrero2707/PhotoFlow) |
+| [JVips](https://github.com/criteo/JVips) |
 
 and others. The official libvips GUI is
 [nip2](https://github.com/libvips/nip2), a strange combination of a
@@ -85,7 +88,7 @@ of the libvips optional dependencies.
 
 There are basic bash completions in `completions/`, see the README in there.
 
-## Cheatsheet 
+## Cheatsheet
 
 ```
 cd libvips-x.y.x
@@ -103,19 +106,19 @@ configuration.
 - Add flags like `-Dnsgif=false` to turn libvips options on and off, see
   `meson_options.txt` for a list of all the build options libvips supports.
 
-- Add flags like `-Dmagick=disabled` to turn libvips dependencies on and off, 
+- Add flags like `-Dmagick=disabled` to turn libvips dependencies on and off,
   see `meson_options.txt` and the list below for a summary of all the libvips
   dependencies.
 
-- You might need to add `--libdir lib` on Debian if you don't want the arch 
+- You might need to add `--libdir lib` on Debian if you don't want the arch
   name in the library path.
 
 - Add `--default-library static` for a static build.
 
-- Use eg. `CC=clang CXX=clang++ meson setup ...` to change compiler.
+- Use e.g. `CC=clang CXX=clang++ meson setup ...` to change compiler.
 
-- You can have many `build-dir`, pick whatever names you like, for example 
-  one for release and one for debug.
+- You can have an alternative build directory, pick whatever names you like,
+  for example one for release and one for debug.
 
 There's a more comprehensive test suite you can run once libvips has been
 installed. Use `pytest` in the libvips base directory.
@@ -124,12 +127,12 @@ installed. Use `pytest` in the libvips base directory.
 
 If suitable versions are found, libvips will add support for the following
 libraries automatically. Packages are generally found with `pkg-config`,
-so make sure that is working. 
+so make sure that is working.
 
 ### libjpeg
 
 Anything that is compatible with the IJG JPEG library. Use `mozjpeg` if you
-can. Another option is `libjpeg-turbo`. 
+can. Another option is `libjpeg-turbo`.
 
 ### libexif
 
@@ -142,8 +145,8 @@ via imagemagick instead.
 
 ### PDFium
 
-If present, libvips will attempt to load PDFs with PDFium. Download the 
-prebuilt pdfium binary from: 
+If present, libvips will attempt to load PDFs with PDFium. Download the
+prebuilt pdfium binary from:
 
     https://github.com/bblanchon/pdfium-binaries
 
@@ -188,16 +191,16 @@ If available, libvips adds support for creating image pyramids with `dzsave`.
 ### libtiff
 
 The TIFF library. It needs to be built with support for JPEG and
-ZIP compression. 3.4b037 and later are known to be OK. 
+ZIP compression. 3.4b037 and later are known to be OK.
 
 ### fftw3
 
-If libvips finds this library, it uses it for fourier transforms. 
+If libvips finds this library, it uses it for fourier transforms.
 
 ### lcms2
 
 If present, `vips_icc_import()`, `vips_icc_export()` and `vips_icc_transform()`
-can be used to manipulate images with ICC profiles. 
+can be used to manipulate images with ICC profiles.
 
 ### libspng
 
@@ -213,24 +216,24 @@ palette-ised PNGs and GIFs.
 
 If available, libvips adds support for loading and saving all
 libMagick-supported image file types. You can enable and disable load and save
-separately. 
+separately.
 
 Imagemagick 6.9+ needs to have been built with `--with-modules`. Most packaged
 IMs are, I think.
 
 If you are going to be using libvips with untrusted images, perhaps in a
 web server, for example, you should consider the security implications of
-enabling a package with such a large attack surface. 
+enabling a package with such a large attack surface.
 
 ### pangocairo
 
 If available, libvips adds support for text rendering. You need the
 package pangocairo in `pkg-config --list-all`.
 
-### orc-0.4
+### highway
 
-If available, vips will accelerate some operations with this run-time
-compiler.
+If present, libvips will accelerate some operations with SIMD. If not, it
+will look for the orc-0.4 package.
 
 ### matio
 
@@ -292,7 +295,7 @@ AVIF encoders:
 
 ### Code Contributors
 
-This project exists thanks to all the people who contribute. 
+This project exists thanks to all the people who contribute.
 
 <a href="https://github.com/libvips/libvips/graphs/contributors"><img src="https://opencollective.com/libvips/contributors.svg?width=890&button=false" /></a>
 

@@ -636,6 +636,9 @@ tile_new(Render *render)
 		return NULL;
 	}
 
+	// tiles are shared between threads
+	vips__region_no_ownership(tile->region);
+
 	render->all = g_slist_prepend(render->all, tile);
 	render->ntiles += 1;
 
@@ -1049,7 +1052,7 @@ vips__sink_screen_once(void *data)
 	render_dirty_lock = vips_g_mutex_new();
 	vips_semaphore_init(&n_render_dirty_sem, 0, "n_render_dirty");
 
-	/* Don't use vips__thread_execute() since this thread will only be
+	/* Don't use vips_thread_execute(), since this thread will only be
 	 * ended by vips_shutdown, and that isn't always called.
 	 */
 	render_thread = vips_g_thread_new("sink_screen",

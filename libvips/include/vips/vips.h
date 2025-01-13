@@ -109,9 +109,6 @@ extern "C" {
 
 #include <vips/private.h>
 
-#if VIPS_ENABLE_DEPRECATED
-#include <vips/mask.h>
-#endif
 #include <vips/image.h>
 #include <vips/memory.h>
 #include <vips/error.h>
@@ -138,8 +135,15 @@ extern "C" {
 #include <vips/colour.h>
 #include <vips/draw.h>
 #include <vips/create.h>
-#if VIPS_ENABLE_DEPRECATED
-#include <vips/video.h>
+
+/* VIPS_DISABLE_COMPAT:
+ *
+ * Disable automatically inclusion of `vips7compat.h`.
+ *
+ * This has no effect when building with `-Ddeprecated=false`.
+ */
+#if VIPS_ENABLE_DEPRECATED && !defined(VIPS_DISABLE_COMPAT)
+#include <vips/vips7compat.h>
 #endif
 
 /* We can't use _ here since this will be compiled by our clients and they may
@@ -158,6 +162,8 @@ extern "C" {
 				  -1) \
 			: vips_init(ARGV0))
 
+VIPS_API
+int vips_max_coord_get(void);
 VIPS_API
 int vips_init(const char *argv0);
 VIPS_API

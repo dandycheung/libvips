@@ -52,7 +52,50 @@
 
 #if defined(HAVE_MAGICK6) || defined(HAVE_MAGICK7)
 
-/* ImageMagick can't detect some formats, like ICO and TGA, by examining the
+/* Imagemagick has weak support for some formats --- for example, AVI is
+ * delegated to ffmpeg, and just getting the header can take many seconds and
+ * many GB of memory.
+ *
+ * This function detects blocked formats which we don't pass to
+ * imagemagick.
+ */
+static gboolean
+magick_block(const unsigned char *bytes, size_t length)
+{
+	// AVI is a RIFF with AVI as the first chunk
+	if (length > 12 &&
+		bytes[0] == 'R' &&
+		bytes[1] == 'I' &&
+		bytes[2] == 'F' &&
+		bytes[3] == 'F' &&
+		bytes[8] == 'A' &&
+		bytes[9] == 'V' &&
+		bytes[10] == 'I' &&
+		bytes[11] == ' ')
+		return TRUE;
+
+	// XML is very slow for some reason, and we handle SVG, so ...
+	if (length > 5 &&
+		bytes[0] == '<' &&
+		bytes[1] == '?' &&
+		bytes[2] == 'x' &&
+		bytes[3] == 'm' &&
+		bytes[4] == 'l' &&
+		bytes[5] == ' ')
+		return TRUE;
+	if (length > 5 &&
+		bytes[0] == '<' &&
+		bytes[1] == '?' &&
+		bytes[2] == 'X' &&
+		bytes[3] == 'M' &&
+		bytes[4] == 'L' &&
+		bytes[5] == ' ')
+		return TRUE;
+
+	return FALSE;
+}
+
+/* ImageMagick can't detect some formats (eg. ICO and TGA) by examining the
  * contents -- ico.c and tga.c simply do not have recognisers.
  *
  * For these formats, do the detection ourselves.
@@ -75,18 +118,10 @@
  * * http://www.paulbourke.net/dataformats/tga/
  * * https://en.wikipedia.org/wiki/Truevision_TGA#Technical_details
  * * https://en.wikipedia.org/wiki/ISO_base_media_file_format#Technical_details
- * * http://lclevy.free.fr/cr2/
  */
 static const char *
 magick_sniff(const unsigned char *bytes, size_t length)
 {
-	if (length >= 4 &&
-		bytes[0] == 0 &&
-		bytes[1] == 0 &&
-		bytes[2] == 1 &&
-		bytes[3] == 0)
-		return "ICO";
-
 	if (length >= 5 &&
 		bytes[0] == 0 &&
 		bytes[1] == 1 &&
@@ -94,6 +129,14 @@ magick_sniff(const unsigned char *bytes, size_t length)
 		bytes[3] == 0 &&
 		bytes[4] == 0)
 		return "TTF";
+
+	if (length >= 6 &&
+		bytes[0] == 0 &&
+		bytes[1] == 0 &&
+		(bytes[2] == 1 || bytes[2] == 2) &&
+		bytes[3] == 0 &&
+		(bytes[4] != 0 || bytes[5] != 0))
+		return "ICO";
 
 	if (length >= 18 &&
 		(bytes[1] == 0 ||
@@ -108,37 +151,25 @@ magick_sniff(const unsigned char *bytes, size_t length)
 		memcmp(bytes + 4, "ftyp", 4) != 0)
 		return "TGA";
 
-	guint32 ifd_offset = 0;
-
-	/* Big-endian TIFF header
+#if defined(HAVE_GETMAGICINFO) || defined(HAVE_MAGICK7)
+	/* Try to search the internal magic list for a match.
 	 */
-	if (length >= 8 &&
-		bytes[0] == 'M' &&
-		bytes[1] == 'M' &&
-		bytes[2] == 0 &&
-		bytes[3] == 42)
-		ifd_offset = ((guint32) bytes[4] << 24) |
-			((guint32) bytes[5] << 16) |
-			((guint32) bytes[6] << 8) |
-			bytes[7];
+	ExceptionInfo *exception = magick_acquire_exception();
+	const MagicInfo *magic_info = GetMagicInfo(bytes, length, exception);
+	magick_destroy_exception(exception);
 
-	/* Little-endian TIFF header
-	 */
-	if (length >= 8 &&
-		bytes[0] == 'I' &&
-		bytes[1] == 'I' &&
-		bytes[2] == 42 &&
-		bytes[3] == 0)
-		ifd_offset = ((guint32) bytes[7] << 24) |
-			((guint32) bytes[6] << 16) |
-			((guint32) bytes[5] << 8) |
-			bytes[4];
+	if (magic_info) {
+		const char *magic_name = GetMagicName(magic_info);
 
-	if (length >= 10 &&
-		ifd_offset >= 6 &&
-		bytes[8] == 'C' &&
-		bytes[9] == 'R')
-		return "CR2";
+		/* Avoid using TIFF as a format hint since RAW/DNG images often
+		 * share the same magic signature as TIFF.
+		 */
+		if (magic_name &&
+			g_ascii_strcasecmp(magic_name, "TIFF") != 0) {
+			return magic_name;
+		}
+	}
+#endif
 
 	return NULL;
 }
@@ -150,7 +181,7 @@ magick_sniff_bytes(ImageInfo *image_info,
 	const char *format;
 
 	if ((format = magick_sniff(bytes, length)))
-		vips_strncpy(image_info->magick, format, MaxTextExtent);
+		g_strlcpy(image_info->magick, format, MaxTextExtent);
 }
 
 void
@@ -278,7 +309,7 @@ magick_set_number_scenes(ImageInfo *image_info, int scene, int number_scenes)
 
 	/* Some IMs must have the string version set as well.
 	 */
-	vips_snprintf(page, 256, "%d-%d", scene, scene + number_scenes);
+	g_snprintf(page, 256, "%d-%d", scene, scene + number_scenes);
 	image_info->scenes = g_strdup(page);
 }
 
@@ -320,8 +351,9 @@ magick_ismagick(const unsigned char *bytes, size_t length)
 
 	/* Try with our custom sniffers first.
 	 */
-	return magick_sniff(bytes, length) ||
-		GetImageMagick(bytes, length, format);
+	return !magick_block(bytes, length) &&
+		(magick_sniff(bytes, length) ||
+		GetImageMagick(bytes, length, format));
 }
 
 int
@@ -595,7 +627,7 @@ magick_set_number_scenes(ImageInfo *image_info, int scene, int number_scenes)
 
 	/* Some IMs must have the string version set as well.
 	 */
-	vips_snprintf(page, 256, "%d-%d", scene, scene + number_scenes);
+	g_snprintf(page, 256, "%d-%d", scene, scene + number_scenes);
 	image_info->scenes = g_strdup(page);
 #else /*!HAVE_NUMBER_SCENES*/
 	/* This works with GM 1.2.31 and probably others.
@@ -624,6 +656,7 @@ magick_optimize_image_layers(Image **images, ExceptionInfo *exception)
 #else  /*!HAVE_OPTIMIZEPLUSIMAGELAYERS*/
 	g_warning("%s", _("layer optimization is not supported by "
 					  "your version of libMagick"));
+
 	return MagickTrue;
 #endif /*HAVE_OPTIMIZEPLUSIMAGELAYERS*/
 }
@@ -634,10 +667,12 @@ magick_optimize_image_transparency(const Image *images,
 {
 #ifdef HAVE_OPTIMIZEIMAGETRANSPARENCY
 	OptimizeImageTransparency(images, exception);
+
 	return exception->severity == UndefinedException;
 #else  /*!HAVE_OPTIMIZEIMAGETRANSPARENCY*/
 	g_warning("%s", _("transparency optimization is not supported by "
 					  "your version of libMagick"));
+
 	return MagickTrue;
 #endif /*HAVE_OPTIMIZEIMAGETRANSPARENCY*/
 }
@@ -655,14 +690,16 @@ magick_ismagick(const unsigned char *bytes, size_t length)
 	{
 		char format[MaxTextExtent];
 
-		return magick_sniff(bytes, length) ||
-			GetImageMagick(bytes, length, format);
+		return !magick_block(bytes, length) &&
+			(magick_sniff(bytes, length) ||
+			GetImageMagick(bytes, length, format));
 	}
 #else /*!HAVE_GETIMAGEMAGICK3*/
 	/* The GM one returns a static string.
 	 */
-	return magick_sniff(bytes, length) ||
-		GetImageMagick(bytes, length);
+	return !magick_block(bytes, length) &&
+		(magick_sniff(bytes, length) ||
+		GetImageMagick(bytes, length));
 #endif
 }
 
@@ -674,6 +711,7 @@ magick_quantize_images(Image *images,
 
 	GetQuantizeInfo(&info);
 	info.number_colors = (1 << depth);
+
 	return QuantizeImages(&info, images);
 }
 

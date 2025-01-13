@@ -61,6 +61,9 @@ extern "C" {
 
 #define VIPS_ABS(X) (((X) >= 0) ? (X) : -(X))
 
+// is something (eg. a pointer) N aligned
+#define VIPS_ALIGNED(P, N) ((((guint64) (P)) & ((N) - 1)) == 0)
+
 /* The built-in isnan and isinf functions provided by gcc 4+ and clang are
  * up to 7x faster than their libc equivalent included from <math.h>.
  */
@@ -123,7 +126,7 @@ extern "C" {
 	{ \
 		if ((N)) { \
 			int duff_count = ((N) + 15) / 16; \
-\
+			\
 			switch ((N) % 16) { \
 			case 0: \
 				do { \
@@ -163,15 +166,6 @@ extern "C" {
 		} \
 	} \
 	G_STMT_END
-
-/* The g_info() macro was added in 2.40.
- */
-#ifndef g_info
-/* Hopefully we have varargs macros. Maybe revisit this.
- */
-#define g_info(...) \
-	g_log(G_LOG_DOMAIN, G_LOG_LEVEL_INFO, __VA_ARGS__)
-#endif
 
 /* Various integer range clips. Record over/under flows.
  */
@@ -293,25 +287,11 @@ void *vips_hash_table_map(GHashTable *hash,
 	VipsSListMap2Fn fn, void *a, void *b);
 
 VIPS_API
-char *vips_strncpy(char *dest, const char *src, int n);
-VIPS_API
-char *vips_strrstr(const char *haystack, const char *needle);
-VIPS_API
-gboolean vips_ispostfix(const char *a, const char *b);
-VIPS_API
 gboolean vips_iscasepostfix(const char *a, const char *b);
 VIPS_API
 gboolean vips_isprefix(const char *a, const char *b);
 VIPS_API
 char *vips_break_token(char *str, const char *brk);
-
-void vips__chomp(char *str);
-
-VIPS_API
-int vips_vsnprintf(char *str, size_t size, const char *format, va_list ap);
-VIPS_API
-int vips_snprintf(char *str, size_t size, const char *format, ...)
-	G_GNUC_PRINTF(3, 4);
 
 VIPS_API
 int vips_filename_suffix_match(const char *path, const char *suffixes[]);
@@ -344,8 +324,7 @@ int vips__file_write(void *data, size_t size, size_t nmemb, FILE *stream);
 /* TODO(kleisauke): VIPS_API is required by the magick module.
  */
 VIPS_API
-gint64 vips__get_bytes(const char *filename,
-	unsigned char buf[], gint64 len);
+gint64 vips__get_bytes(const char *filename, unsigned char buf[], gint64 len);
 int vips__fgetc(FILE *fp);
 
 GValue *vips__gvalue_ref_string_new(const char *text);
@@ -400,6 +379,8 @@ typedef enum {
 	VIPS_TOKEN_COMMA
 } VipsToken;
 
+// we expose this one in the API for testing
+VIPS_API
 const char *vips__token_get(const char *buffer,
 	VipsToken *token, char *string, int size);
 const char *vips__token_must(const char *buffer, VipsToken *token,

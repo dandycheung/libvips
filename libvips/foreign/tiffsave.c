@@ -94,7 +94,6 @@ typedef struct _VipsForeignSaveTiff {
 	VipsForeignTiffCompression compression;
 	int Q;
 	VipsForeignTiffPredictor predictor;
-	char *profile;
 	gboolean tile;
 	int tile_width;
 	int tile_height;
@@ -145,7 +144,6 @@ static int
 vips_foreign_save_tiff_build(VipsObject *object)
 {
 	VipsForeignSaveClass *class = VIPS_FOREIGN_SAVE_GET_CLASS(object);
-
 	VipsForeignSave *save = (VipsForeignSave *) object;
 	VipsForeignSaveTiff *tiff = (VipsForeignSaveTiff *) object;
 
@@ -210,7 +208,7 @@ vips_foreign_save_tiff_build(VipsObject *object)
 
 	if (vips__tiff_write_target(save->ready, tiff->target,
 			tiff->compression, tiff->Q, tiff->predictor,
-			tiff->profile,
+			save->profile,
 			tiff->tile, tiff->tile_width, tiff->tile_height,
 			tiff->pyramid,
 			tiff->bitdepth,
@@ -219,7 +217,6 @@ vips_foreign_save_tiff_build(VipsObject *object)
 			tiff->bigtiff,
 			tiff->rgbjpeg,
 			tiff->properties,
-			save->strip,
 			tiff->region_shrink,
 			tiff->level,
 			tiff->lossless,
@@ -278,13 +275,6 @@ vips_foreign_save_tiff_class_init(VipsForeignSaveTiffClass *class)
 		G_STRUCT_OFFSET(VipsForeignSaveTiff, predictor),
 		VIPS_TYPE_FOREIGN_TIFF_PREDICTOR,
 		VIPS_FOREIGN_TIFF_PREDICTOR_HORIZONTAL);
-
-	VIPS_ARG_STRING(class, "profile", 9,
-		_("Profile"),
-		_("ICC profile to embed"),
-		VIPS_ARGUMENT_OPTIONAL_INPUT,
-		G_STRUCT_OFFSET(VipsForeignSaveTiff, profile),
-		NULL);
 
 	VIPS_ARG_BOOL(class, "tile", 10,
 		_("Tile"),
@@ -372,10 +362,10 @@ vips_foreign_save_tiff_class_init(VipsForeignSaveTiffClass *class)
 
 	VIPS_ARG_INT(class, "level", 23,
 		_("Level"),
-		_("ZSTD compression level"),
+		_("Deflate (1-9, default 6) or ZSTD (1-22, default 9) compression level"),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET(VipsForeignSaveTiff, level),
-		1, 22, 10);
+		1, 22, 6);
 
 	VIPS_ARG_BOOL(class, "lossless", 24,
 		_("Lossless"),
@@ -405,14 +395,14 @@ vips_foreign_save_tiff_class_init(VipsForeignSaveTiffClass *class)
 		G_STRUCT_OFFSET(VipsForeignSaveTiff, premultiply),
 		FALSE);
 
-	VIPS_ARG_BOOL(class, "rgbjpeg", 20,
+	VIPS_ARG_BOOL(class, "rgbjpeg", 28,
 		_("RGB JPEG"),
 		_("Output RGB JPEG rather than YCbCr"),
 		VIPS_ARGUMENT_OPTIONAL_INPUT | VIPS_ARGUMENT_DEPRECATED,
 		G_STRUCT_OFFSET(VipsForeignSaveTiff, rgbjpeg),
 		FALSE);
 
-	VIPS_ARG_BOOL(class, "squash", 14,
+	VIPS_ARG_BOOL(class, "squash", 29,
 		_("Squash"),
 		_("Squash images down to 1 bit"),
 		VIPS_ARGUMENT_OPTIONAL_INPUT | VIPS_ARGUMENT_DEPRECATED,
@@ -432,7 +422,7 @@ vips_foreign_save_tiff_init(VipsForeignSaveTiff *tiff)
 	tiff->xres = 1.0;
 	tiff->yres = 1.0;
 	tiff->region_shrink = VIPS_REGION_SHRINK_MEAN;
-	tiff->level = 10;
+	tiff->level = 0;
 	tiff->lossless = FALSE;
 	tiff->depth = VIPS_FOREIGN_DZ_DEPTH_ONETILE;
 	tiff->bitdepth = 0;
@@ -620,7 +610,6 @@ vips_foreign_save_tiff_buffer_init(VipsForeignSaveTiffBuffer *buffer)
  * * @compression: use this #VipsForeignTiffCompression
  * * @Q: %gint quality factor
  * * @predictor: use this #VipsForeignTiffPredictor
- * * @profile: %gchararray, filename of ICC profile to attach
  * * @tile: %gboolean, set %TRUE to write a tiled tiff
  * * @tile_width: %gint for tile size
  * * @tile_height: %gint for tile size
@@ -633,7 +622,7 @@ vips_foreign_save_tiff_buffer_init(VipsForeignSaveTiffBuffer *buffer)
  * * @bigtiff: %gboolean, write a BigTiff file
  * * @properties: %gboolean, set %TRUE to write an IMAGEDESCRIPTION tag
  * * @region_shrink: #VipsRegionShrink How to shrink each 2x2 region.
- * * @level: %gint, Zstd compression level
+ * * @level: %gint, Zstd or Deflate (zlib) compression level
  * * @lossless: %gboolean, WebP lossless mode
  * * @depth: #VipsForeignDzDepth how deep to make the pyramid
  * * @subifd: %gboolean write pyr layers as sub-ifds
@@ -658,21 +647,13 @@ vips_foreign_save_tiff_buffer_init(VipsForeignSaveTiffBuffer *buffer)
  *
  * Use @Q to set the JPEG compression factor. Default 75.
  *
- * User @level to set the ZSTD compression level. Use @lossless to
+ * User @level to set the ZSTD (1-22) or Deflate (1-9) compression level. Use @lossless to
  * set WEBP lossless mode on. Use @Q to set the WEBP compression level.
  *
  * Use @predictor to set the predictor for lzw, deflate and zstd compression.
  * It defaults to #VIPS_FOREIGN_TIFF_PREDICTOR_HORIZONTAL, meaning horizontal
  * differencing. Please refer to the libtiff
  * specifications for further discussion of various predictors.
- *
- * Use @profile to give the filename of a profile to be embedded in the TIFF.
- * This does not affect the pixels which are written, just the way
- * they are tagged. See vips_profile_load() for details on profile naming.
- *
- * If no profile is specified and the VIPS header
- * contains an ICC profile named #VIPS_META_ICC_NAME, the
- * profile from the VIPS header will be attached.
  *
  * Set @tile to TRUE to write a tiled tiff.  By default tiff are written in
  * strips. Use @tile_width and @tile_height to set the tile size. The defaiult
@@ -760,7 +741,6 @@ vips_tiffsave(VipsImage *in, const char *filename, ...)
  * * @compression: use this #VipsForeignTiffCompression
  * * @Q: %gint quality factor
  * * @predictor: use this #VipsForeignTiffPredictor
- * * @profile: %gchararray, filename of ICC profile to attach
  * * @tile: %gboolean, set %TRUE to write a tiled tiff
  * * @tile_width: %gint for tile size
  * * @tile_height: %gint for tile size
@@ -773,7 +753,7 @@ vips_tiffsave(VipsImage *in, const char *filename, ...)
  * * @bigtiff: %gboolean, write a BigTiff file
  * * @properties: %gboolean, set %TRUE to write an IMAGEDESCRIPTION tag
  * * @region_shrink: #VipsRegionShrink How to shrink each 2x2 region.
- * * @level: %gint, Zstd compression level
+ * * @level: %gint, Zstd or Deflate (zlib) compression level
  * * @lossless: %gboolean, WebP lossless mode
  * * @depth: #VipsForeignDzDepth how deep to make the pyramid
  * * @subifd: %gboolean write pyr layers as sub-ifds
@@ -828,7 +808,6 @@ vips_tiffsave_buffer(VipsImage *in, void **buf, size_t *len, ...)
  * * @compression: use this #VipsForeignTiffCompression
  * * @Q: %gint quality factor
  * * @predictor: use this #VipsForeignTiffPredictor
- * * @profile: %gchararray, filename of ICC profile to attach
  * * @tile: %gboolean, set %TRUE to write a tiled tiff
  * * @tile_width: %gint for tile size
  * * @tile_height: %gint for tile size
@@ -841,7 +820,7 @@ vips_tiffsave_buffer(VipsImage *in, void **buf, size_t *len, ...)
  * * @bigtiff: %gboolean, write a BigTiff file
  * * @properties: %gboolean, set %TRUE to write an IMAGEDESCRIPTION tag
  * * @region_shrink: #VipsRegionShrink How to shrink each 2x2 region.
- * * @level: %gint, Zstd compression level
+ * * @level: %gint, Zstd or Deflate (zlib) compression level
  * * @lossless: %gboolean, WebP lossless mode
  * * @depth: #VipsForeignDzDepth how deep to make the pyramid
  * * @subifd: %gboolean write pyr layers as sub-ifds

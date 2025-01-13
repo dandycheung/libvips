@@ -57,26 +57,34 @@ public_headers = files(
     'vips.h',
 )
 
+enum_headers = files(
+    'resample.h',
+    'memory.h',
+    'create.h',
+    'foreign.h',
+    'arithmetic.h',
+    'conversion.h',
+    'util.h',
+    'image.h',
+    'colour.h',
+    'operation.h',
+    'convolution.h',
+    'morphology.h',
+    'draw.h',
+    'basic.h',
+    'object.h',
+    'region.h'
+)
+
+if get_option('deprecated')
+    enum_headers += files(
+        'almostdeprecated.h',
+    )
+endif
+
 enumtypes = gnome.mkenums(
     'enumtypes',
-    sources: files(
-        'resample.h',
-        'memory.h',
-        'create.h',
-        'foreign.h',
-        'arithmetic.h',
-        'conversion.h',
-        'util.h',
-        'image.h',
-        'colour.h',
-        'operation.h',
-        'convolution.h',
-        'morphology.h',
-        'draw.h',
-        'basic.h',
-        'object.h',
-        'region.h'
-    ),
+    sources: enum_headers,
     h_template: 'enumtypes.h.in',
     c_template: 'enumtypes.c.in',
     install_header: true,
@@ -93,10 +101,18 @@ foreach _, section : build_summary
            continue
         endif
 
-        vips_verbose_config += '@0@: @1@@2@@3@@4@'.format(key, arr[0],
-            arr.length() > 1 ? arr[1] : '',
-            arr.length() > 2 ? arr[2] : '',
-            arr.length() > 3 ? arr[3] : '')
+        vips_verbose_config += '@0@: @1@'.format(key, arr[0])
+    endforeach
+endforeach
+foreach _, section : build_features
+    foreach key, arr : section
+        dep_name = arr[0]
+        found = arr[1].found()
+        if found and arr[1].type_name() != 'internal'
+            dep_name = arr[1].name()
+        endif
+        dynamic_module = arr.length() > 2 ? ' (dynamic module: @0@)'.format(arr[2]) : ''
+        vips_verbose_config += '@0@ with @1@: @2@@3@'.format(key, dep_name, found, dynamic_module)
     endforeach
 endforeach
 

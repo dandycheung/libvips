@@ -80,10 +80,17 @@ typedef struct _VipsForeignLoadJxl {
 	 */
 	VipsSource *source;
 
-	/* Page set by user, then we translate that into shrink factor.
+	/* Shrink by this much during load.
+	 */
+	int shrink;
+
+	/* Load this page (frame number).
 	 */
 	int page;
-	int shrink;
+
+	/* Load this many pages.
+	 */
+	int n;
 
 	/* Base image properties.
 	 */
@@ -91,6 +98,29 @@ typedef struct _VipsForeignLoadJxl {
 	JxlPixelFormat format;
 	size_t icc_size;
 	uint8_t *icc_data;
+	size_t exif_size;
+	uint8_t *exif_data;
+	size_t xmp_size;
+	uint8_t *xmp_data;
+
+	int frame_count;
+	GArray *delay;
+
+	/* JXL multipage and animated images are the same, but multipage has
+	 * all the frame delays set to -1 (duration 0xffffffff).
+	 */
+	gboolean is_animated;
+
+	/* The current accumulated frame as a VipsImage. These are the pixels
+	 * we send to the output. It's a info->xsize * info->ysize memory
+	 * image.
+	 */
+	VipsImage *frame;
+
+	/* The frame number currently in @frame. Numbered from 1, so 0 means
+	 * before the first frame.
+	 */
+	int frame_no;
 
 	/* Decompress state.
 	 */
@@ -101,6 +131,11 @@ typedef struct _VipsForeignLoadJxl {
 	 */
 	uint8_t input_buffer[INPUT_BUFFER_SIZE];
 	size_t bytes_in_buffer;
+
+	/* Pointers to fields where box size and box data should be written to
+	 */
+	size_t *box_size;
+	uint8_t **box_data;
 
 	/* Number of errors reported during load -- use this to block load of
 	 * corrupted images.
@@ -133,6 +168,10 @@ vips_foreign_load_jxl_dispose(GObject *gobject)
 	VIPS_FREEF(JxlThreadParallelRunnerDestroy, jxl->runner);
 	VIPS_FREEF(JxlDecoderDestroy, jxl->decoder);
 	VIPS_FREE(jxl->icc_data);
+	VIPS_FREE(jxl->exif_data);
+	VIPS_FREE(jxl->xmp_data);
+	VIPS_FREEF(g_array_unref, jxl->delay);
+	VIPS_UNREF(jxl->frame);
 	VIPS_UNREF(jxl->source);
 
 	G_OBJECT_CLASS(vips_foreign_load_jxl_parent_class)->dispose(gobject);
@@ -188,7 +227,49 @@ vips_foreign_load_jxl_is_a_source(VipsSource *source)
 static VipsForeignFlags
 vips_foreign_load_jxl_get_flags(VipsForeignLoad *load)
 {
-	return VIPS_FOREIGN_PARTIAL;
+	/* FIXME .. could support random access for non-animated images.
+	 */
+	return VIPS_FOREIGN_SEQUENTIAL;
+}
+
+static int
+vips_foreign_load_jxl_set_box_buffer(VipsForeignLoadJxl *jxl)
+{
+	if (!jxl->box_data || !jxl->box_size)
+		return 0;
+
+	VipsObjectClass *class = VIPS_OBJECT_GET_CLASS(jxl);
+
+	uint8_t *new_data;
+	size_t new_size;
+	size_t box_size = *jxl->box_size;
+
+	new_size = box_size + INPUT_BUFFER_SIZE;
+	new_data = g_try_realloc(*jxl->box_data, new_size);
+
+	if (!new_data) {
+		vips_error(class->nickname, "%s", _("out of memory"));
+		return -1;
+	}
+
+	*jxl->box_data = new_data;
+
+	JxlDecoderSetBoxBuffer(jxl->decoder,
+		new_data + box_size, INPUT_BUFFER_SIZE);
+
+	return 0;
+}
+
+static int
+vips_foreign_load_jxl_release_box_buffer(VipsForeignLoadJxl *jxl)
+{
+	if (!jxl->box_data || !jxl->box_size)
+		return 0;
+
+	size_t remaining = JxlDecoderReleaseBoxBuffer(jxl->decoder);
+	*jxl->box_size += INPUT_BUFFER_SIZE - remaining;
+
+	return 0;
 }
 
 static int
@@ -208,10 +289,12 @@ vips_foreign_load_jxl_fill_input(VipsForeignLoadJxl *jxl,
 	bytes_read = vips_source_read(jxl->source,
 		jxl->input_buffer + bytes_remaining,
 		INPUT_BUFFER_SIZE - bytes_remaining);
-	/* Read error, or unexpected end of input.
+
+	/* Read error.
 	 */
-	if (bytes_read <= 0)
+	if (bytes_read < 0)
 		return -1;
+
 	jxl->bytes_in_buffer = bytes_read + bytes_remaining;
 
 #ifdef DEBUG_VERBOSE
@@ -219,7 +302,7 @@ vips_foreign_load_jxl_fill_input(VipsForeignLoadJxl *jxl,
 		bytes_read);
 #endif /*DEBUG_VERBOSE*/
 
-	return 0;
+	return bytes_read;
 }
 
 #ifdef DEBUG
@@ -243,16 +326,16 @@ vips_foreign_load_jxl_print_status(JxlDecoderStatus status)
 		printf("JXL_DEC_NEED_PREVIEW_OUT_BUFFER\n");
 		break;
 
-	case JXL_DEC_NEED_DC_OUT_BUFFER:
-		printf("JXL_DEC_NEED_DC_OUT_BUFFER\n");
-		break;
-
 	case JXL_DEC_NEED_IMAGE_OUT_BUFFER:
 		printf("JXL_DEC_NEED_IMAGE_OUT_BUFFER\n");
 		break;
 
 	case JXL_DEC_JPEG_NEED_MORE_OUTPUT:
 		printf("JXL_DEC_JPEG_NEED_MORE_OUTPUT\n");
+		break;
+
+	case JXL_DEC_BOX_NEED_MORE_OUTPUT:
+		printf("JXL_DEC_BOX_NEED_MORE_OUTPUT\n");
 		break;
 
 	case JXL_DEC_BASIC_INFO:
@@ -275,16 +358,16 @@ vips_foreign_load_jxl_print_status(JxlDecoderStatus status)
 		printf("JXL_DEC_FRAME\n");
 		break;
 
-	case JXL_DEC_DC_IMAGE:
-		printf("JXL_DEC_DC_IMAGE\n");
-		break;
-
 	case JXL_DEC_FULL_IMAGE:
 		printf("JXL_DEC_FULL_IMAGE\n");
 		break;
 
 	case JXL_DEC_JPEG_RECONSTRUCTION:
 		printf("JXL_DEC_JPEG_RECONSTRUCTION\n");
+		break;
+
+	case JXL_DEC_BOX:
+		printf("JXL_DEC_BOX\n");
 		break;
 
 	default:
@@ -356,6 +439,56 @@ vips_foreign_load_jxl_print_format(JxlPixelFormat *format)
 	printf("    endianness = %d\n", format->endianness);
 	printf("    align = %zd\n", format->align);
 }
+
+static const char *
+vips_foreign_load_jxl_blend_mode(JxlBlendMode blendmode)
+{
+	switch (blendmode) {
+	case JXL_BLEND_REPLACE:
+		return "JXL_BLEND_REPLACE";
+
+	case JXL_BLEND_ADD:
+		return "JXL_BLEND_ADD";
+
+	case JXL_BLEND_BLEND:
+		return "JXL_BLEND_BLEND";
+
+	case JXL_BLEND_MULADD:
+		return "JXL_BLEND_MULADD";
+
+	case JXL_BLEND_MUL:
+		return "JXL_BLEND_MUL";
+
+	default:
+		return "<unknown JxlBlendMode";
+	}
+}
+
+static void
+vips_foreign_load_jxl_print_frame_header(JxlFrameHeader *h)
+{
+	printf("JxlFrameHeader:\n");
+	printf("    duration = %u\n", h->duration);
+	printf("    timecode = %u\n", h->timecode);
+	printf("    name_length = %u\n", h->name_length);
+	printf("    is_last = %s\n", h->is_last ? "TRUE" : "FALSE");
+	printf("    layer_info.have_crop = %s\n",
+		h->layer_info.have_crop ? "TRUE" : "FALSE");
+	printf("    layer_info.crop_x0 = %d\n", h->layer_info.crop_x0);
+	printf("    layer_info.crop_y0 = %d\n", h->layer_info.crop_y0);
+	printf("    layer_info.xsize = %u\n", h->layer_info.xsize);
+	printf("    layer_info.ysize = %u\n", h->layer_info.ysize);
+	printf("    layer_info.blend_info.blendmode = %s\n",
+		vips_foreign_load_jxl_blend_mode(h->layer_info.blend_info.blendmode));
+	printf("    layer_info.blend_info.source = %u\n",
+		h->layer_info.blend_info.source);
+	printf("    layer_info.blend_info.alpha = %u\n",
+		h->layer_info.blend_info.alpha);
+	printf("    layer_info.blend_info.clamp = %s\n",
+		h->layer_info.blend_info.clamp ? "TRUE" : "FALSE");
+	printf("    layer_info.save_as_reference = %u\n",
+		h->layer_info.save_as_reference);
+}
 #endif /*DEBUG*/
 
 static JxlDecoderStatus
@@ -370,16 +503,24 @@ vips_foreign_load_jxl_process(VipsForeignLoadJxl *jxl)
 	while ((status = JxlDecoderProcessInput(jxl->decoder)) ==
 		JXL_DEC_NEED_MORE_INPUT) {
 		size_t bytes_remaining;
+		int bytes_read;
 
-#ifdef DEBUG
+#ifdef DEBUG_VERBOSE
 		printf("vips_foreign_load_jxl_process: reading ...\n");
-#endif /*DEBUG*/
+#endif /*DEBUG_VERBOSE*/
 
 		bytes_remaining = JxlDecoderReleaseInput(jxl->decoder);
-		if (vips_foreign_load_jxl_fill_input(jxl, bytes_remaining))
+		bytes_read = vips_foreign_load_jxl_fill_input(jxl, bytes_remaining);
+
+		if (bytes_read < 0)
 			return JXL_DEC_ERROR;
-		JxlDecoderSetInput(jxl->decoder,
-			jxl->input_buffer, jxl->bytes_in_buffer);
+
+		if (jxl->bytes_in_buffer)
+			JxlDecoderSetInput(jxl->decoder,
+				jxl->input_buffer, jxl->bytes_in_buffer);
+
+		if (!bytes_read)
+			JxlDecoderCloseInput(jxl->decoder);
 	}
 
 #ifdef DEBUG
@@ -388,6 +529,145 @@ vips_foreign_load_jxl_process(VipsForeignLoadJxl *jxl)
 #endif /*DEBUG*/
 
 	return status;
+}
+
+static int
+vips_foreign_load_jxl_read_frame(VipsForeignLoadJxl *jxl, VipsImage *frame,
+	int frame_no)
+{
+	VipsObjectClass *class = VIPS_OBJECT_GET_CLASS(jxl);
+
+	size_t buffer_size;
+	JxlDecoderStatus status;
+
+	if (jxl->frame_no >= frame_no)
+		return 0;
+
+	int skip = frame_no - jxl->frame_no - 1;
+	if (skip > 0) {
+#ifdef DEBUG_VERBOSE
+		printf("vips_foreign_load_jxl_read_frame: skipping %d frames\n", skip);
+#endif /*DEBUG_VERBOSE*/
+
+		JxlDecoderSkipFrames(jxl->decoder, skip);
+		jxl->frame_no += skip;
+	}
+
+	/* Read to the end of the image.
+	 */
+	do {
+		switch ((status = vips_foreign_load_jxl_process(jxl))) {
+		case JXL_DEC_ERROR:
+			vips_foreign_load_jxl_error(jxl, "JxlDecoderProcessInput");
+			return -1;
+
+		case JXL_DEC_FRAME:
+			jxl->frame_no++;
+			break;
+
+		case JXL_DEC_NEED_IMAGE_OUT_BUFFER:
+			if (JxlDecoderImageOutBufferSize(jxl->decoder,
+					&jxl->format, &buffer_size)) {
+				vips_foreign_load_jxl_error(jxl,
+					"JxlDecoderImageOutBufferSize");
+				return -1;
+			}
+			if (buffer_size != VIPS_IMAGE_SIZEOF_IMAGE(frame)) {
+				vips_error(class->nickname, "%s", _("bad buffer size"));
+				return -1;
+			}
+			if (JxlDecoderSetImageOutBuffer(jxl->decoder, &jxl->format,
+					VIPS_IMAGE_ADDR(frame, 0, 0),
+					VIPS_IMAGE_SIZEOF_IMAGE(frame))) {
+				vips_foreign_load_jxl_error(jxl, "JxlDecoderSetImageOutBuffer");
+				return -1;
+			}
+			break;
+
+		case JXL_DEC_FULL_IMAGE:
+			/* We decoded the required frame and can return
+			 */
+			if (jxl->frame_no >= frame_no)
+				return 0;
+
+			break;
+
+		default:
+			break;
+		}
+	} while (status != JXL_DEC_SUCCESS);
+
+	/* We didn't find the required frame
+	 */
+	vips_error(class->nickname, "%s", _("not enough frames"));
+	return -1;
+}
+
+static int
+vips_foreign_load_jxl_generate(VipsRegion *out_region,
+	void *seq, void *a, void *b, gboolean *stop)
+{
+	VipsRect *r = &out_region->valid;
+	VipsForeignLoadJxl *jxl = (VipsForeignLoadJxl *) a;
+
+	/* jxl>frame_no numbers from 1.
+	 */
+	int frame = 1 + r->top / jxl->info.ysize + jxl->page;
+	int line = r->top % jxl->info.ysize;
+
+#ifdef DEBUG_VERBOSE
+	printf("vips_foreign_load_jxl_generate: line %d\n", r->top);
+#endif /*DEBUG_VERBOSE*/
+
+	g_assert(r->height == 1);
+
+	if (vips_foreign_load_jxl_read_frame(jxl, jxl->frame, frame))
+		return -1;
+
+	memcpy(VIPS_REGION_ADDR(out_region, 0, r->top),
+		VIPS_IMAGE_ADDR(jxl->frame, 0, line),
+		VIPS_IMAGE_SIZEOF_LINE(jxl->frame));
+
+	return 0;
+}
+
+/* JPEG XL stores EXIF data without leading "Exif\0\0" with offset
+ */
+static int
+vips_foreign_load_jxl_fix_exif(VipsForeignLoadJxl *jxl)
+{
+	VipsObjectClass *class = VIPS_OBJECT_GET_CLASS(jxl);
+
+	if (!jxl->exif_data ||
+		vips_isprefix("Exif", (char *) jxl->exif_data))
+		return 0;
+
+	if (jxl->exif_size < 4) {
+		g_warning("%s: invalid data in EXIF box", class->nickname);
+		return -1;
+	}
+
+	/* Offset is stored in big-endian
+	 */
+	size_t offset = GUINT32_FROM_BE(*((guint32 *) jxl->exif_data));
+	if (offset > jxl->exif_size - 4) {
+		g_warning("%s: invalid data in EXIF box", class->nickname);
+		return -1;
+	}
+
+	size_t new_size = jxl->exif_size - 4 - offset + 6;
+	uint8_t *new_data;
+	if (!(new_data = VIPS_MALLOC(NULL, new_size)))
+		return -1;
+
+	memcpy(new_data, "Exif\0\0", 6);
+	memcpy(new_data + 6, jxl->exif_data + 4 + offset, new_size - 6);
+
+	VIPS_FREE(jxl->exif_data);
+	jxl->exif_size = new_size;
+	jxl->exif_data = new_data;
+
+	return 0;
 }
 
 static int
@@ -400,8 +680,7 @@ vips_foreign_load_jxl_set_header(VipsForeignLoadJxl *jxl, VipsImage *out)
 
 	if (jxl->info.xsize >= VIPS_MAX_COORD ||
 		jxl->info.ysize >= VIPS_MAX_COORD) {
-		vips_error(class->nickname,
-			"%s", _("image size out of bounds"));
+		vips_error(class->nickname, "%s", _("image size out of bounds"));
 		return -1;
 	}
 
@@ -464,8 +743,55 @@ vips_foreign_load_jxl_set_header(VipsForeignLoadJxl *jxl, VipsImage *out)
 		break;
 	}
 
+	if (jxl->frame_count > 1) {
+		if (jxl->n == -1)
+			jxl->n = jxl->frame_count - jxl->page;
+
+		if (jxl->page < 0 ||
+			jxl->n <= 0 ||
+			jxl->page + jxl->n > jxl->frame_count) {
+			vips_error(class->nickname, "%s", _("bad page number"));
+			return -1;
+		}
+
+		vips_image_set_int(out, VIPS_META_N_PAGES, jxl->frame_count);
+
+		if (jxl->n > 1)
+			vips_image_set_int(out, VIPS_META_PAGE_HEIGHT, jxl->info.ysize);
+
+		if (jxl->is_animated) {
+			int *delay = (int *) jxl->delay->data;
+
+			vips_image_set_array_int(out, "delay", delay, jxl->frame_count);
+
+			/* gif uses centiseconds for delays
+			 */
+			vips_image_set_int(out, "gif-delay", VIPS_RINT(delay[0] / 10.0));
+
+			vips_image_set_int(out, "loop", jxl->info.animation.num_loops);
+		}
+	}
+	else {
+		jxl->n = 1;
+		jxl->page = 0;
+	}
+
+	/* Init jxl->frame only when we need to decode multiple frames.
+	 * Otherwise, we can decode the frame right to the output
+	 */
+	if (jxl->n > 1 && !jxl->frame) {
+		jxl->frame = vips_image_new_memory();
+		vips_image_init_fields(jxl->frame,
+			jxl->info.xsize, jxl->info.ysize, jxl->format.num_channels,
+			format, VIPS_CODING_NONE, interpretation, 1.0, 1.0);
+		if (vips_image_pipelinev(jxl->frame,
+				VIPS_DEMAND_STYLE_THINSTRIP, NULL) ||
+			vips_image_write_prepare(jxl->frame))
+			return -1;
+	}
+
 	vips_image_init_fields(out,
-		jxl->info.xsize, jxl->info.ysize, jxl->format.num_channels,
+		jxl->info.xsize, jxl->info.ysize * jxl->n, jxl->format.num_channels,
 		format, VIPS_CODING_NONE, interpretation, 1.0, 1.0);
 
 	/* Even though this is a full image reader, we hint thinstrip since
@@ -478,14 +804,28 @@ vips_foreign_load_jxl_set_header(VipsForeignLoadJxl *jxl, VipsImage *out)
 	if (jxl->icc_data &&
 		jxl->icc_size > 0) {
 		vips_image_set_blob(out, VIPS_META_ICC_NAME,
-			(VipsCallbackFn) vips_area_free_cb,
-			jxl->icc_data, jxl->icc_size);
+			(VipsCallbackFn) vips_area_free_cb, jxl->icc_data, jxl->icc_size);
 		jxl->icc_data = NULL;
 		jxl->icc_size = 0;
 	}
 
-	vips_image_set_int(out,
-		VIPS_META_ORIENTATION, jxl->info.orientation);
+	if (jxl->exif_data &&
+		jxl->exif_size > 0) {
+		vips_image_set_blob(out, VIPS_META_EXIF_NAME,
+			(VipsCallbackFn) vips_area_free_cb, jxl->exif_data, jxl->exif_size);
+		jxl->exif_data = NULL;
+		jxl->exif_size = 0;
+	}
+
+	if (jxl->xmp_data &&
+		jxl->xmp_size > 0) {
+		vips_image_set_blob(out, VIPS_META_XMP_NAME,
+			(VipsCallbackFn) vips_area_free_cb, jxl->xmp_data, jxl->xmp_size);
+		jxl->xmp_data = NULL;
+		jxl->xmp_size = 0;
+	}
+
+	vips_image_set_int(out, VIPS_META_ORIENTATION, jxl->info.orientation);
 
 	vips_image_set_int(out, VIPS_META_BITS_PER_SAMPLE,
 		jxl->info.bits_per_sample);
@@ -499,6 +839,8 @@ vips_foreign_load_jxl_header(VipsForeignLoad *load)
 	VipsForeignLoadJxl *jxl = (VipsForeignLoadJxl *) load;
 
 	JxlDecoderStatus status;
+	JXL_BOOL decompress_boxes = JXL_TRUE;
+	JxlFrameHeader h;
 
 #ifdef DEBUG
 	printf("vips_foreign_load_jxl_header:\n");
@@ -510,25 +852,72 @@ vips_foreign_load_jxl_header(VipsForeignLoad *load)
 	JxlDecoderRewind(jxl->decoder);
 	if (JxlDecoderSubscribeEvents(jxl->decoder,
 			JXL_DEC_COLOR_ENCODING |
-				JXL_DEC_BASIC_INFO)) {
-		vips_foreign_load_jxl_error(jxl,
-			"JxlDecoderSubscribeEvents");
+				JXL_DEC_BASIC_INFO |
+				JXL_DEC_BOX |
+				JXL_DEC_FRAME)) {
+		vips_foreign_load_jxl_error(jxl, "JxlDecoderSubscribeEvents");
 		return -1;
 	}
 
-	if (vips_foreign_load_jxl_fill_input(jxl, 0))
+	if (JxlDecoderSetDecompressBoxes(jxl->decoder, JXL_TRUE) != JXL_DEC_SUCCESS)
+		decompress_boxes = JXL_FALSE;
+
+	if (vips_foreign_load_jxl_fill_input(jxl, 0) < 0)
 		return -1;
-	JxlDecoderSetInput(jxl->decoder,
-		jxl->input_buffer, jxl->bytes_in_buffer);
+	JxlDecoderSetInput(jxl->decoder, jxl->input_buffer, jxl->bytes_in_buffer);
+
+	jxl->frame_count = 0;
 
 	/* Read to the end of the header.
 	 */
 	do {
 		switch ((status = vips_foreign_load_jxl_process(jxl))) {
 		case JXL_DEC_ERROR:
-			vips_foreign_load_jxl_error(jxl,
-				"JxlDecoderProcessInput");
+			vips_foreign_load_jxl_error(jxl, "JxlDecoderProcessInput");
 			return -1;
+
+		case JXL_DEC_BOX:
+			/* Flush previous box data if any
+			 */
+			if (vips_foreign_load_jxl_release_box_buffer(jxl))
+				return -1;
+
+			JxlBoxType type;
+			if (JxlDecoderGetBoxType(
+					jxl->decoder, type, decompress_boxes) != JXL_DEC_SUCCESS) {
+				vips_foreign_load_jxl_error(jxl, "JxlDecoderGetBoxType");
+				return -1;
+			}
+
+#ifdef DEBUG
+			const char type_s[] = { type[0], type[1], type[2], type[3], 0 };
+			printf("vips_foreign_load_jxl_header found box %s\n", type_s);
+#endif /*DEBUG*/
+
+			if (!memcmp(type, "Exif", 4)) {
+				jxl->box_size = &jxl->exif_size;
+				jxl->box_data = &jxl->exif_data;
+			}
+			else if (!memcmp(type, "xml ", 4)) {
+				jxl->box_size = &jxl->xmp_size;
+				jxl->box_data = &jxl->xmp_data;
+			}
+			else {
+				jxl->box_size = NULL;
+				jxl->box_data = NULL;
+			}
+
+			if (vips_foreign_load_jxl_set_box_buffer(jxl))
+				return -1;
+
+			break;
+
+		case JXL_DEC_BOX_NEED_MORE_OUTPUT:
+			if (vips_foreign_load_jxl_release_box_buffer(jxl) ||
+				vips_foreign_load_jxl_set_box_buffer(jxl))
+				return -1;
+
+			break;
 
 		case JXL_DEC_BASIC_INFO:
 			if (JxlDecoderGetBasicInfo(jxl->decoder,
@@ -564,26 +953,25 @@ vips_foreign_load_jxl_header(VipsForeignLoad *load)
 
 		case JXL_DEC_COLOR_ENCODING:
 			if (JxlDecoderGetICCProfileSize(jxl->decoder,
+#ifndef HAVE_LIBJXL_0_9
 					&jxl->format,
-					JXL_COLOR_PROFILE_TARGET_DATA,
-					&jxl->icc_size)) {
-				vips_foreign_load_jxl_error(jxl,
-					"JxlDecoderGetICCProfileSize");
+#endif
+					JXL_COLOR_PROFILE_TARGET_DATA, &jxl->icc_size)) {
+				vips_foreign_load_jxl_error(jxl, "JxlDecoderGetICCProfileSize");
 				return -1;
 			}
 
 #ifdef DEBUG
-			printf(
-				"vips_foreign_load_jxl_header: "
-				"%zd byte profile\n",
+			printf("vips_foreign_load_jxl_header: %zd byte profile\n",
 				jxl->icc_size);
 #endif /*DEBUG*/
-			if (!(jxl->icc_data = vips_malloc(NULL,
-					  jxl->icc_size)))
+			if (!(jxl->icc_data = vips_malloc(NULL, jxl->icc_size)))
 				return -1;
 
 			if (JxlDecoderGetColorAsICCProfile(jxl->decoder,
+#ifndef HAVE_LIBJXL_0_9
 					&jxl->format,
+#endif
 					JXL_COLOR_PROFILE_TARGET_DATA,
 					jxl->icc_data, jxl->icc_size)) {
 				vips_foreign_load_jxl_error(jxl,
@@ -592,13 +980,54 @@ vips_foreign_load_jxl_header(VipsForeignLoad *load)
 			}
 			break;
 
+		case JXL_DEC_FRAME:
+			if (JxlDecoderGetFrameHeader(jxl->decoder, &h) != JXL_DEC_SUCCESS) {
+				vips_foreign_load_jxl_error(jxl, "JxlDecoderGetFrameHeader");
+				return -1;
+			}
+
+#ifdef DEBUG
+			vips_foreign_load_jxl_print_frame_header(&h);
+#endif /*DEBUG*/
+
+			if (jxl->info.have_animation) {
+				// tick duration in seconds
+				double tick = (double) jxl->info.animation.tps_denominator /
+					jxl->info.animation.tps_numerator;
+				// this duration in ms
+				int ms = VIPS_RINT(1000.0 * h.duration * tick);
+				// h.duration of 0xffffffff is used for multipage JXL ... map
+				// this to -1 in delay
+				int duration = h.duration == 0xffffffff ? -1 : ms;
+
+				jxl->delay = g_array_append_vals(jxl->delay, &duration, 1);
+			}
+
+			jxl->frame_count++;
+
+			break;
+
 		default:
 			break;
 		}
-		/* JXL_DEC_COLOR_ENCODING is always the last status signal before
-		 * pixel decoding starts.
-		 */
-	} while (status != JXL_DEC_COLOR_ENCODING);
+	} while (status != JXL_DEC_SUCCESS);
+
+	/* Detect JXL multipage (rather than animated).
+	 */
+	int *delay = (int *) jxl->delay->data;
+	for (int i = 0; i < jxl->delay->len; i++)
+		if (delay[i] != -1) {
+			jxl->is_animated = TRUE;
+			break;
+		}
+
+	/* Flush box data if any
+	 */
+	if (vips_foreign_load_jxl_release_box_buffer(jxl))
+		return -1;
+
+	if (vips_foreign_load_jxl_fix_exif(jxl))
+		return -1;
 
 	if (vips_foreign_load_jxl_set_header(jxl, load->out))
 		return -1;
@@ -612,13 +1041,11 @@ vips_foreign_load_jxl_header(VipsForeignLoad *load)
 static int
 vips_foreign_load_jxl_load(VipsForeignLoad *load)
 {
-	VipsObjectClass *class = VIPS_OBJECT_GET_CLASS(load);
 	VipsForeignLoadJxl *jxl = (VipsForeignLoadJxl *) load;
 	VipsImage **t = (VipsImage **)
 		vips_object_local_array(VIPS_OBJECT(load), 3);
 
-	size_t buffer_size;
-	JxlDecoderStatus status;
+	VipsImage *out;
 
 #ifdef DEBUG
 	printf("vips_foreign_load_jxl_load:\n");
@@ -636,64 +1063,41 @@ vips_foreign_load_jxl_load(VipsForeignLoad *load)
 
 	JxlDecoderRewind(jxl->decoder);
 	if (JxlDecoderSubscribeEvents(jxl->decoder,
-			JXL_DEC_FULL_IMAGE)) {
+				JXL_DEC_FRAME | JXL_DEC_FULL_IMAGE)) {
 		vips_foreign_load_jxl_error(jxl,
 			"JxlDecoderSubscribeEvents");
 		return -1;
 	}
 
-	if (vips_foreign_load_jxl_fill_input(jxl, 0))
+	if (vips_foreign_load_jxl_fill_input(jxl, 0) < 0)
 		return -1;
 	JxlDecoderSetInput(jxl->decoder,
 		jxl->input_buffer, jxl->bytes_in_buffer);
 
-	/* Read to the end of the image.
-	 */
-	do {
-		switch ((status = vips_foreign_load_jxl_process(jxl))) {
-		case JXL_DEC_ERROR:
-			vips_foreign_load_jxl_error(jxl,
-				"JxlDecoderProcessInput");
+	if (jxl->n > 1) {
+		if (vips_image_generate(t[0],
+				NULL, vips_foreign_load_jxl_generate, NULL, jxl, NULL) ||
+			vips_sequential(t[0], &t[1], NULL))
 			return -1;
 
-		case JXL_DEC_NEED_IMAGE_OUT_BUFFER:
-			if (vips_image_write_prepare(t[0]))
-				return -1;
+		out = t[1];
+	}
+	else {
+		/* We need only a single frame, we can read it right to the output
+		 */
+		if (vips_image_write_prepare(t[0]) ||
+			vips_foreign_load_jxl_read_frame(jxl, t[0], jxl->page + 1))
+			return -1;
 
-			if (JxlDecoderImageOutBufferSize(jxl->decoder,
-					&jxl->format,
-					&buffer_size)) {
-				vips_foreign_load_jxl_error(jxl,
-					"JxlDecoderImageOutBufferSize");
-				return -1;
-			}
-			if (buffer_size !=
-				VIPS_IMAGE_SIZEOF_IMAGE(t[0])) {
-				vips_error(class->nickname,
-					"%s", _("bad buffer size"));
-				return -1;
-			}
-			if (JxlDecoderSetImageOutBuffer(jxl->decoder,
-					&jxl->format,
-					VIPS_IMAGE_ADDR(t[0], 0, 0),
-					VIPS_IMAGE_SIZEOF_IMAGE(t[0]))) {
-				vips_foreign_load_jxl_error(jxl,
-					"JxlDecoderSetImageOutBuffer");
-				return -1;
-			}
-			break;
+		out = t[0];
+	}
 
-		case JXL_DEC_FULL_IMAGE:
-			/* Image decoded.
-			 */
-			break;
+	if (vips_image_write(out, load->real))
+		return -1;
 
-		default:
-			break;
-		}
-	} while (status != JXL_DEC_SUCCESS);
-
-	if (vips_image_write(t[0], load->real))
+	/* Switch to pixel decode.
+	 */
+	if (vips_source_decode(jxl->source))
 		return -1;
 
 	return 0;
@@ -723,11 +1127,27 @@ vips_foreign_load_jxl_class_init(VipsForeignLoadJxlClass *class)
 	load_class->get_flags = vips_foreign_load_jxl_get_flags;
 	load_class->header = vips_foreign_load_jxl_header;
 	load_class->load = vips_foreign_load_jxl_load;
+
+	VIPS_ARG_INT(class, "page", 20,
+		_("Page"),
+		_("First page to load"),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET(VipsForeignLoadJxl, page),
+		0, 100000, 0);
+
+	VIPS_ARG_INT(class, "n", 21,
+		_("n"),
+		_("Number of pages to load, -1 for all"),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET(VipsForeignLoadJxl, n),
+		-1, 100000, 1);
 }
 
 static void
 vips_foreign_load_jxl_init(VipsForeignLoadJxl *jxl)
 {
+	jxl->n = 1;
+	jxl->delay = g_array_new(FALSE, FALSE, sizeof(int));
 }
 
 typedef struct _VipsForeignLoadJxlFile {

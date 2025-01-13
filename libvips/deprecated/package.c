@@ -58,7 +58,6 @@
 #include <limits.h>
 
 #include <vips/vips.h>
-#include <vips/vips7compat.h>
 #include <vips/internal.h>
 #include <vips/debug.h>
 
@@ -323,7 +322,7 @@ static int
 getext_vec(im_object *argv)
 {
 	void **out = (void **) &argv[1];
-	int size;
+	size_t size;
 
 	/* void/char confusion is fine.
 	 */
@@ -662,9 +661,7 @@ im_load_plugin(const char *name)
 #ifdef ENABLE_MODULES
 	Plugin *plug;
 
-#ifdef DEBUG
-	printf("im_load_plugin: \"%s\"\n", name);
-#endif /*DEBUG*/
+	g_info("im_load_plugin: loading \"%s\" ...", name);
 
 	if (!g_module_supported()) {
 		vips_error("plugin",
@@ -718,9 +715,7 @@ im_load_plugin(const char *name)
 		return NULL;
 	}
 
-#ifdef DEBUG
-	printf("added package \"%s\"\n", plug->pack->name);
-#endif /*DEBUG*/
+	g_info("im_load_plugin: added package \"%s\"", plug->pack->name);
 
 	return plug->pack;
 #else  /*!ENABLE_MODULES*/
@@ -753,9 +748,7 @@ im_load_plugins(const char *fmt, ...)
 	(void) im_vsnprintf(dir_name, VIPS_PATH_MAX - 1, fmt, ap);
 	va_end(ap);
 
-#ifdef DEBUG
-	printf("im_load_plugins: searching \"%s\"\n", dir_name);
-#endif /*DEBUG*/
+	g_info("im_load_plugins: searching \"%s\"", dir_name);
 
 	if (!(dir = g_dir_open(dir_name, 0, NULL)))
 		/* Silent success for dir not there.

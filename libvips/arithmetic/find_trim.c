@@ -93,12 +93,8 @@ vips_find_trim_build(VipsObject *object)
 	 * for this interpretation.
 	 */
 	if (!vips_object_argument_isset(object, "background"))
-		if (find_trim->in->Type == VIPS_INTERPRETATION_GREY16 ||
-			find_trim->in->Type == VIPS_INTERPRETATION_RGB16) {
-			vips_area_unref(VIPS_AREA(find_trim->background));
-			find_trim->background =
-				vips_array_double_newv(1, 65535.0);
-		}
+		find_trim->background = vips_array_double_newv(1,
+			vips_interpretation_max_alpha(find_trim->in->Type));
 
 	/* Flatten out alpha, if any.
 	 */
@@ -127,10 +123,10 @@ vips_find_trim_build(VipsObject *object)
 	if (!find_trim->line_art) {
 		if (vips_median(in, &t[1], 3, NULL))
 			return -1;
+		in = t[1];
 	}
-	in = t[1];
 
-	/* Smooth, find difference from bg, abs, threshold.
+	/* Find difference from bg, abs, threshold.
 	 */
 	if (vips_linear(in, &t[2], ones, neg_bg, n, NULL) ||
 		vips_abs(t[2], &t[3], NULL) ||
@@ -249,7 +245,6 @@ static void
 vips_find_trim_init(VipsFindTrim *find_trim)
 {
 	find_trim->threshold = 10;
-	find_trim->background = vips_array_double_newv(1, 255.0);
 }
 
 /**
@@ -270,12 +265,10 @@ vips_find_trim_init(VipsFindTrim *find_trim)
  * Search @in for the bounding box of the non-background area.
  *
  * Any alpha is flattened out, then the image is median-filtered (unless
- * @line_art is set, see below), all the row
- * and column sums of the absolute
- * difference from @background are calculated in a
- * single pass, then the first row or column in each of the
- * four directions where the sum is greater than @threshold gives the bounding
- * box.
+ * @line_art is set, see below). The absolute difference from @background is
+ * computed and binarized according to @threshold. Row and column sums of
+ * the absolute difference are calculated from this binary image and searched
+ * for the first row or column in each direction to obtain the bounding box.
  *
  * If the image is entirely background, vips_find_trim() returns @width == 0
  * and @height == 0.

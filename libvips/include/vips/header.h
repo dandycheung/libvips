@@ -41,7 +41,7 @@ extern "C" {
 /**
  * VIPS_META_EXIF_NAME:
  *
- * The name that JPEG read and write operations use for the image's EXIF data.
+ * The name that read and write operations use for the image's EXIF data.
  */
 #define VIPS_META_EXIF_NAME "exif-data"
 
@@ -98,6 +98,13 @@ extern "C" {
  * The bits per sample for each channel.
  */
 #define VIPS_META_BITS_PER_SAMPLE "bits-per-sample"
+
+/**
+ * VIPS_META_PALETTE:
+ *
+ * Does this image have a palette?
+ */
+#define VIPS_META_PALETTE "palette"
 
 /**
  * VIPS_META_LOADER:
@@ -175,6 +182,9 @@ VIPS_API
 guint64 vips_format_sizeof(VipsBandFormat format);
 VIPS_API
 guint64 vips_format_sizeof_unsafe(VipsBandFormat format);
+
+VIPS_API
+double vips_interpretation_max_alpha(VipsInterpretation interpretation);
 
 VIPS_API
 int vips_image_get_width(const VipsImage *image);

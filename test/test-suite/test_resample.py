@@ -2,8 +2,7 @@
 import pytest
 
 import pyvips
-from helpers import JPEG_FILE, JPEG_FILE_XYB, OME_FILE, HEIC_FILE, TIF_FILE, \
-    all_formats, have, RGBA_FILE, RGBA_CORRECT_FILE, AVIF_FILE
+from helpers import *
 
 
 # Run a function expecting a complex image on a two-band image
@@ -84,7 +83,8 @@ class TestResample:
         for fac in [1, 1.1, 1.5, 1.999]:
             for fmt in all_formats:
                 for kernel in ["nearest", "linear",
-                               "cubic", "lanczos2", "lanczos3"]:
+                               "cubic", "lanczos2",
+                               "lanczos3", "mks2013", "mks2021"]:
                     x = im.cast(fmt)
                     r = x.reduce(fac, fac, kernel=kernel)
                     d = abs(r.avg() - im.avg())
@@ -94,7 +94,8 @@ class TestResample:
         for const in [0, 1, 2, 254, 255]:
             im = (pyvips.Image.black(10, 10) + const).cast("uchar")
             for kernel in ["nearest", "linear",
-                           "cubic", "lanczos2", "lanczos3"]:
+                           "cubic", "lanczos2",
+                           "lanczos3", "mks2013", "mks2021"]:
                 # print "testing kernel =", kernel
                 # print "testing const =", const
                 shr = im.reduce(2, 2, kernel=kernel)
@@ -200,7 +201,7 @@ class TestResample:
         im2 = pyvips.Image.thumbnail(OME_FILE + "[page=1]", 100)
         assert im2.width == 100
         assert im2.height == 38
-        assert (im1 - im2).abs().max() != 0 
+        assert (im1 - im2).abs().max() != 0
 
         # should be able to thumbnail entire many-page tiff as a toilet-roll
         # image
@@ -220,12 +221,20 @@ class TestResample:
         im2 = pyvips.Image.new_from_file(RGBA_CORRECT_FILE)
         assert abs(im1.flatten(background=255).avg() - im2.avg()) < 1
 
+        # thumbnailing a 16-bit image should always make an 8-bit image
+        rgb16_buffer = pyvips.Image \
+                .new_from_file(JPEG_FILE) \
+                .colourspace("rgb16") \
+                .write_to_buffer(".png")
+        thumb = pyvips.Image.thumbnail_buffer(rgb16_buffer, 128)
+        assert thumb.format == "uchar"
+
         if have("heifload"):
             # this image is orientation 6 ... thumbnail should flip it
             im = pyvips.Image.new_from_file(AVIF_FILE)
             thumb = pyvips.Image.thumbnail(AVIF_FILE, 100)
 
-            # thumb should be portrait 
+            # thumb should be portrait
             assert thumb.width < thumb.height
             assert thumb.height == 100
 

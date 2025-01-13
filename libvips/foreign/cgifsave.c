@@ -48,6 +48,7 @@
 #include <string.h>
 
 #include <vips/vips.h>
+#include <vips/internal.h>
 
 #include "pforeign.h"
 #include "quantise.h"
@@ -86,6 +87,7 @@ typedef struct _VipsForeignSaveCgif {
 	double interframe_maxerror;
 	gboolean reuse;
 	gboolean interlace;
+	gboolean keep_duplicate_frames;
 	double interpalette_maxerror;
 	VipsTarget *target;
 
@@ -179,8 +181,7 @@ vips__cgif_write(void *client, const uint8_t *buffer, const size_t length)
 {
 	VipsTarget *target = VIPS_TARGET(client);
 
-	return vips_target_write(target,
-		(const void *) buffer, (size_t) length);
+	return vips_target_write(target, (const void *) buffer, (size_t) length);
 }
 
 #define TRANS_STATE_NONE 0
@@ -200,7 +201,6 @@ vips_foreign_save_cgif_set_transparent(VipsForeignSaveCgif *cgif,
 {
 	int sq_maxerror = cgif->interframe_maxerror * cgif->interframe_maxerror;
 
-	int i;
 	gboolean this_trans = FALSE;
 	int trans_state = TRANS_STATE_NONE;
 	int trans_count = 0;
@@ -210,7 +210,7 @@ vips_foreign_save_cgif_set_transparent(VipsForeignSaveCgif *cgif,
 	VipsPel *trans_start_old = old;
 	VipsPel *trans_start_new = new;
 
-	for (i = 0; i < n_pels; i++) {
+	for (int i = 0; i < n_pels; i++) {
 		/* Alpha must match
 		 */
 		if (old[3] == new[3]) {
@@ -227,8 +227,7 @@ vips_foreign_save_cgif_set_transparent(VipsForeignSaveCgif *cgif,
 				const int dG = old[1] - new[1];
 				const int dB = old[2] - new[2];
 
-				this_trans = dR * dR + dG * dG + dB * dB <=
-					sq_maxerror;
+				this_trans = dR * dR + dG * dG + dB * dB <= sq_maxerror;
 			}
 		}
 
@@ -239,13 +238,12 @@ vips_foreign_save_cgif_set_transparent(VipsForeignSaveCgif *cgif,
 
 		if (!this_trans) {
 			/* Found an opaque pixel.
-			 * If we found a single transparent pixel before,
-			 * we haven't been copying new to old since then.
-			 * Time to do it now
+			 *
+			 * If we found a single transparent pixel before, we haven't been
+			 * copying new to old since then. Time to do it now.
 			 */
 			if (trans_state == TRANS_STATE_SINGLE)
-				memcpy(trans_start_old, trans_start_new,
-					old - trans_start_old);
+				memcpy(trans_start_old, trans_start_new, old - trans_start_old);
 
 			/* And reset the transparent pixels state
 			 */
@@ -258,20 +256,17 @@ vips_foreign_save_cgif_set_transparent(VipsForeignSaveCgif *cgif,
 			trans_count++;
 
 			if (trans_state == TRANS_STATE_NONE) {
-				/* Found the first pixel that should be
-				 * transparent
+				/* Found the first pixel that should be transparent.
 				 */
 				if (x == 0)
-					/* If we are at the start of the row,
-					 * start making pixels transparent
-					 * right away to help CGIF to trim the
-					 * frame
+					/* If we are at the start of the row, start making pixels
+					 * transparent right away to help CGIF to trim the
+					 * frame.
 					 */
 					trans_state = TRANS_STATE_ROW;
 				else {
-					/* Otherwise, just mark the
-					 * point where we found it and update
-					 * the transparent pixels state
+					/* Otherwise, just mark the point where we found it and
+					 * update the transparent pixels state.
 					 */
 					trans_start_index = index;
 					trans_start_old = old;
@@ -279,39 +274,34 @@ vips_foreign_save_cgif_set_transparent(VipsForeignSaveCgif *cgif,
 					trans_state = TRANS_STATE_SINGLE;
 				}
 
-				/* We don't want to break a row of identical
-				 * indexes with a transparent pixel because
-				 * this would be unoptimal for LZW.
+				/* We don't want to break a row of identical indexes with a
+				 * transparent pixel because this would be unoptimal for LZW.
 				 * The only exception is if we are at the end of the
 				 * row. In this case, transparent pixels will help CGIF
-				 * to trim the frame
+				 * to trim the frame.
 				 */
 			}
 			else if (trans_state == TRANS_STATE_SINGLE &&
 				(trans_count * 2 >= same_count + 32 ||
 					x == width - 1 || *index != index[-1])) {
-				/* We found a transparent pixel before
-				 * and the previous index doesn't match the
-				 * current index. Make all pixels from the
-				 * marked point to the current point
-				 * transparent and update the transparent
-				 * pixels state
+				/* We found a transparent pixel before and the previous index
+				 * doesn't match the current index. Make all pixels from the
+				 * marked point to the current point transparent and update
+				 * the transparent pixels state.
 				 */
 				trans_state = TRANS_STATE_ROW;
-				memset(trans_start_index, trans,
-					index - trans_start_index);
+				memset(trans_start_index, trans, index - trans_start_index);
 			}
 		}
 
 		if (trans_state == TRANS_STATE_ROW)
-			/* Since we have more than one transparent pixel in
-			 * a row, it's safe to make the current pixel
-			 * transparent
+			/* Since we have more than one transparent pixel in a row, it's
+			 * safe to make the current pixel transparent.
 			 */
 			*index = trans;
 		else if (trans_state == TRANS_STATE_NONE) {
-			/* We did not find a pixel that should be transparent
-			 * before. Just copy new to old
+			/* We did not find a pixel that should be transparent before. Just
+			 * copy new to old.
 			 */
 			old[0] = new[0];
 			old[1] = new[1];
@@ -336,7 +326,6 @@ static double
 vips__cgif_compare_palettes(const VipsQuantisePalette *new,
 	const VipsQuantisePalette *old)
 {
-	int i, j;
 	double best_dist, dist, rd, gd, bd;
 	double total_dist;
 
@@ -344,14 +333,14 @@ vips__cgif_compare_palettes(const VipsQuantisePalette *new,
 	g_assert(old->count <= 256);
 
 	total_dist = 0;
-	for (i = 0; i < new->count; i++) {
+	for (int i = 0; i < new->count; i++) {
 		best_dist = 255 * 255 * 3;
 
-		for (j = 0; j < old->count; j++) {
+		for (int j = 0; j < old->count; j++) {
 			if (new->entries[i].a) {
 				/* The new entry is solid.
-				 * If the old entry is transparent, ignore it.
-				 * Otherwise, compare RGB.
+				 * If the old entry is transparent, ignore it.  Otherwise,
+				 * compare RGB.
 				 */
 				if (!old->entries[j].a)
 					continue;
@@ -363,15 +352,15 @@ vips__cgif_compare_palettes(const VipsQuantisePalette *new,
 
 				best_dist = VIPS_MIN(best_dist, dist);
 
-				/* We found the closest entry
+				/* We found the closest entry.
 				 */
 				if (best_dist == 0)
 					break;
 			}
 			else {
 				/* The new entry is transparent.
-				 * If the old entry is transparent too, it's
-				 * the closest color. Otherwise, ignore it.
+				 * If the old entry is transparent too, it's the closest
+				 * color. Otherwise, ignore it.
 				 */
 				if (!old->entries[j].a) {
 					best_dist = 0;
@@ -395,11 +384,9 @@ vips_foreign_save_cgif_get_rgb_palette(VipsForeignSaveCgif *cgif,
 	const VipsQuantisePalette *lp =
 		vips__quantise_get_palette(quantisation_result);
 
-	int i;
-
 	g_assert(lp->count <= 256);
 
-	for (i = 0; i < lp->count; i++) {
+	for (int i = 0; i < lp->count; i++) {
 		rgb[0] = lp->entries[i].r;
 		rgb[1] = lp->entries[i].g;
 		rgb[2] = lp->entries[i].b;
@@ -410,15 +397,13 @@ vips_foreign_save_cgif_get_rgb_palette(VipsForeignSaveCgif *cgif,
 
 int
 vips_foreign_save_cgif_pick_quantiser(VipsForeignSaveCgif *cgif,
-	VipsQuantiseImage *image,
-	VipsQuantiseResult **result, gboolean *use_local)
+	VipsQuantiseImage *image, VipsQuantiseResult **result, gboolean *use_local)
 {
 	VipsObjectClass *class = VIPS_OBJECT_GET_CLASS(cgif);
 
 	VipsQuantiseResult *this_result;
 
-	if (vips__quantise_image_quantize_fixed(image, cgif->attr,
-			&this_result)) {
+	if (vips__quantise_image_quantize_fixed(image, cgif->attr, &this_result)) {
 		vips_error(class->nickname, "%s", _("quantisation failed"));
 		return -1;
 	}
@@ -438,8 +423,8 @@ vips_foreign_save_cgif_pick_quantiser(VipsForeignSaveCgif *cgif,
 		*use_local = FALSE;
 	}
 	else {
-		/* Compare the palette we just made to the palette
-		 * for the previous frame, and to the global palette.
+		/* Compare the palette we just made to the palette for the previous
+		 * frame, and to the global palette.
 		 */
 		const VipsQuantisePalette *global = vips__quantise_get_palette(
 			cgif->quantisation_result);
@@ -448,22 +433,18 @@ vips_foreign_save_cgif_pick_quantiser(VipsForeignSaveCgif *cgif,
 		const VipsQuantisePalette *prev = vips__quantise_get_palette(
 			cgif->previous_quantisation_result);
 
-		double global_diff =
-			vips__cgif_compare_palettes(this, global);
+		double global_diff = vips__cgif_compare_palettes(this, global);
 		double prev_diff = prev == global
 			? global_diff
 			: vips__cgif_compare_palettes(this, prev);
 
 #ifdef DEBUG_VERBOSE
 		printf("vips_foreign_save_cgif_write_frame: "
-			   "this -> global distance = %g\n",
-			global_diff);
+			   "this -> global distance = %g\n", global_diff);
 		printf("vips_foreign_save_cgif_write_frame: "
-			   "this -> prev distance = %g\n",
-			prev_diff);
+			   "this -> prev distance = %g\n", prev_diff);
 		printf("vips_foreign_save_cgif_write_frame: "
-			   "threshold = %g\n",
-			cgif->interpalette_maxerror);
+			   "threshold = %g\n", cgif->interpalette_maxerror);
 #endif /*DEBUG_VERBOSE*/
 
 		if (global_diff <= prev_diff &&
@@ -475,8 +456,7 @@ vips_foreign_save_cgif_pick_quantiser(VipsForeignSaveCgif *cgif,
 				   "using global palette\n");
 #endif /*DEBUG_VERBOSE*/
 
-			VIPS_FREEF(vips__quantise_result_destroy,
-				this_result);
+			VIPS_FREEF(vips__quantise_result_destroy, this_result);
 			VIPS_FREEF(vips__quantise_result_destroy,
 				cgif->free_quantisation_result);
 
@@ -491,15 +471,13 @@ vips_foreign_save_cgif_pick_quantiser(VipsForeignSaveCgif *cgif,
 				   "using previous palette\n");
 #endif /*DEBUG_VERBOSE*/
 
-			VIPS_FREEF(vips__quantise_result_destroy,
-				this_result);
+			VIPS_FREEF(vips__quantise_result_destroy, this_result);
 
 			*result = cgif->previous_quantisation_result;
 			*use_local = TRUE;
 		}
 		else {
-			/* Nothing else works, we need a new local
-			 * palette.
+			/* Nothing else works, we need a new local palette.
 			 */
 #ifdef DEBUG_VERBOSE
 			printf("vips_foreign_save_cgif_write_frame: "
@@ -532,7 +510,6 @@ vips_foreign_save_cgif_write_frame(VipsForeignSaveCgif *cgif)
 	gboolean has_transparency;
 	gboolean has_alpha_constraint;
 	VipsPel *restrict p;
-	int i;
 	VipsQuantiseImage *image;
 	gboolean use_local;
 	VipsQuantiseResult *quantisation_result;
@@ -557,7 +534,7 @@ vips_foreign_save_cgif_write_frame(VipsForeignSaveCgif *cgif)
 	 */
 	p = cgif->frame_bytes;
 	has_alpha_constraint = FALSE;
-	for (i = 0; i < n_pels; i++) {
+	for (int i = 0; i < n_pels; i++) {
 		if (p[3] >= 128)
 			p[3] = 255;
 		else {
@@ -614,9 +591,19 @@ vips_foreign_save_cgif_write_frame(VipsForeignSaveCgif *cgif)
 
 	VIPS_FREEF(vips__quantise_image_destroy, image);
 
+	/* Remapping is relatively slow, trigger eval callbacks.
+	 */
+	vips_image_eval(cgif->in, n_pels);
+	if (vips_image_iskilled(cgif->in))
+		return -1;
+
 	/* Set up cgif on first use.
 	 */
 	if (!cgif->cgif_context) {
+#ifdef HAVE_CGIF_GEN_KEEP_IDENT_FRAMES
+		if (cgif->keep_duplicate_frames)
+			cgif->cgif_config.genFlags = CGIF_GEN_KEEP_IDENT_FRAMES;
+#endif
 #ifdef HAVE_CGIF_ATTR_NO_LOOP
 		cgif->cgif_config.attrFlags =
 			CGIF_ATTR_IS_ANIMATED |
@@ -718,14 +705,12 @@ vips_foreign_save_cgif_sink_disc(VipsRegion *region, VipsRect *area, void *a)
 	VipsForeignSaveCgif *cgif = (VipsForeignSaveCgif *) a;
 	int line_size = cgif->frame_width * 4;
 
-	int y;
-
 #ifdef DEBUG_VERBOSE
 	printf("vips_foreign_save_cgif_sink_disc: strip at %d, height %d\n",
 		area->top, area->height);
 #endif /*DEBUG_VERBOSE*/
 
-	for (y = 0; y < area->height; y++) {
+	for (int y = 0; y < area->height; y++) {
 		memcpy(cgif->frame_bytes + cgif->write_y * line_size,
 			VIPS_REGION_ADDR(region, 0, area->top + y),
 			line_size);
@@ -801,8 +786,7 @@ vips_foreign_save_cgif_build(VipsObject *object)
 
 	/* The frame index buffer.
 	 */
-	cgif->index = g_malloc0((size_t) cgif->frame_width *
-		cgif->frame_height);
+	cgif->index = g_malloc0((size_t) cgif->frame_width * cgif->frame_height);
 
 	/* Set up libimagequant.
 	 */
@@ -825,8 +809,7 @@ vips_foreign_save_cgif_build(VipsObject *object)
 			return -1;
 
 		if (cgif->n_colours > 256) {
-			vips_error(class->nickname,
-				"%s", _("gif-palette too large"));
+			vips_error(class->nickname, "%s", _("gif-palette too large"));
 			return -1;
 		}
 	}
@@ -841,16 +824,14 @@ vips_foreign_save_cgif_build(VipsObject *object)
 		guint32 fake_image[257];
 		VipsQuantiseImage *image;
 
-		memcpy(fake_image, cgif->palette,
-			cgif->n_colours * sizeof(int));
+		memcpy(fake_image, cgif->palette, cgif->n_colours * sizeof(int));
 		fake_image[cgif->n_colours] = 0;
 		image = vips__quantise_image_create_rgba(cgif->attr,
 			fake_image, cgif->n_colours + 1, 1, 0);
 
 		if (vips__quantise_image_quantize_fixed(image,
 				cgif->attr, &cgif->quantisation_result)) {
-			vips_error(class->nickname,
-				"%s", _("quantisation failed"));
+			vips_error(class->nickname, "%s", _("quantisation failed"));
 			return -1;
 		}
 
@@ -866,8 +847,7 @@ vips_foreign_save_cgif_build(VipsObject *object)
 	else
 		cgif->mode = VIPS_FOREIGN_SAVE_CGIF_MODE_LOCAL;
 
-	if (vips_sink_disc(cgif->in,
-			vips_foreign_save_cgif_sink_disc, cgif))
+	if (vips_sink_disc(cgif->in, vips_foreign_save_cgif_sink_disc, cgif))
 		return -1;
 
 	VIPS_FREEF(cgif_close, cgif->cgif_context);
@@ -968,6 +948,13 @@ vips_foreign_save_cgif_class_init(VipsForeignSaveCgifClass *class)
 		VIPS_ARGUMENT_OPTIONAL_INPUT | VIPS_ARGUMENT_DEPRECATED,
 		G_STRUCT_OFFSET(VipsForeignSaveCgif, reoptimise),
 		FALSE);
+
+	VIPS_ARG_BOOL(class, "keep_duplicate_frames", 18,
+		_("Keep duplicate frames"),
+		_("Keep duplicate frames in the output instead of combining them"),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET(VipsForeignSaveCgif, keep_duplicate_frames),
+		FALSE);
 }
 
 static void
@@ -998,17 +985,13 @@ static int
 vips_foreign_save_cgif_target_build(VipsObject *object)
 {
 	VipsForeignSaveCgif *gif = (VipsForeignSaveCgif *) object;
-	VipsForeignSaveCgifTarget *target =
-		(VipsForeignSaveCgifTarget *) object;
+	VipsForeignSaveCgifTarget *target = (VipsForeignSaveCgifTarget *) object;
 
 	gif->target = target->target;
 	g_object_ref(gif->target);
 
-	if (VIPS_OBJECT_CLASS(vips_foreign_save_cgif_target_parent_class)
-			->build(object))
-		return -1;
-
-	return 0;
+	return VIPS_OBJECT_CLASS(vips_foreign_save_cgif_target_parent_class)
+		->build(object);
 }
 
 static void
@@ -1056,11 +1039,8 @@ vips_foreign_save_cgif_file_build(VipsObject *object)
 	if (!(gif->target = vips_target_new_to_file(file->filename)))
 		return -1;
 
-	if (VIPS_OBJECT_CLASS(vips_foreign_save_cgif_file_parent_class)
-			->build(object))
-		return -1;
-
-	return 0;
+	return VIPS_OBJECT_CLASS(vips_foreign_save_cgif_file_parent_class)
+			->build(object);
 }
 
 static void
@@ -1165,6 +1145,8 @@ vips_foreign_save_cgif_buffer_init(VipsForeignSaveCgifBuffer *buffer)
  * * @interlace: %gboolean, write an interlaced (progressive) GIF
  * * @interpalette_maxerror: %gdouble, maximum inter-palette error for palette
  *   reusage
+ * * @keep_duplicate_frames: %boolean, keep duplicate frames in the output
+ *   instead of combining them
  *
  * Write to a file in GIF format.
  *
@@ -1192,6 +1174,9 @@ vips_foreign_save_cgif_buffer_init(VipsForeignSaveCgifBuffer *buffer)
  * If @interlace is TRUE, the GIF file will be interlaced (progressive GIF).
  * These files may be better for display over a slow network
  * connection, but need more memory to encode.
+ *
+ * If @keep_duplicate_frames is TRUE, duplicate frames in the input will be
+ * kept in the output instead of combining them.
  *
  * See also: vips_image_new_from_file().
  *
@@ -1227,6 +1212,8 @@ vips_gifsave(VipsImage *in, const char *filename, ...)
  * * @interlace: %gboolean, write an interlaced (progressive) GIF
  * * @interpalette_maxerror: %gdouble, maximum inter-palette error for palette
  *   reusage
+ * * @keep_duplicate_frames: %boolean, keep duplicate frames in the output
+ *   instead of combining them
  *
  * As vips_gifsave(), but save to a memory buffer.
  *
@@ -1282,6 +1269,8 @@ vips_gifsave_buffer(VipsImage *in, void **buf, size_t *len, ...)
  * * @interlace: %gboolean, write an interlaced (progressive) GIF
  * * @interpalette_maxerror: %gdouble, maximum inter-palette error for palette
  *   reusage
+ * * @keep_duplicate_frames: %boolean, keep duplicate frames in the output
+ *   instead of combining them
  *
  * As vips_gifsave(), but save to a target.
  *

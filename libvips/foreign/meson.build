@@ -3,6 +3,7 @@ if get_option('nsgif')
 endif
 
 foreign_sources = files(
+    'archive.c',
     'analyze2vips.c',
     'analyzeload.c',
     'cairo.c',
@@ -31,6 +32,7 @@ foreign_sources = files(
     'nsgifload.c',
     'openexr2vips.c',
     'openexrload.c',
+    'pdf.c',
     'pdfiumload.c',
     'pngload.c',
     'pngsave.c',
@@ -106,6 +108,7 @@ endif
 
 poppler_module_sources = files(
     'popplerload.c',
+    'pdf.c',
 )
 
 if not libpoppler_module

@@ -45,7 +45,6 @@
 #include <math.h>
 
 #include <vips/vips.h>
-#include <vips/vips7compat.h>
 #include <vips/internal.h>
 
 static int
@@ -129,11 +128,14 @@ im_dif_std(IMAGE *im, int xpos, int ypos, int xsize, int ysize, int dx, int dy, 
 
 	m = 0.0;
 	s = 0.0;
-	if (im__mean_std_int_buffer(buf, bufsize, &m, &s))
+	if (im__mean_std_int_buffer(buf, bufsize, &m, &s)) {
+		free((char *) buf);
 		return -1;
+	}
+	free((char *) buf);
+
 	*pmean = m;
 	*pstd = s;
-	free((char *) buf);
 
 	return 0;
 }

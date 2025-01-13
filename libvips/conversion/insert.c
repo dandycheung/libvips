@@ -116,10 +116,8 @@ typedef VipsConversionClass VipsInsertClass;
 G_DEFINE_TYPE(VipsInsert, vips_insert, VIPS_TYPE_CONVERSION);
 
 /* Trivial case: we just need pels from one of the inputs.
- *
- * Also used by vips_arrayjoin.
  */
-int
+static int
 vips__insert_just_one(VipsRegion *out_region, VipsRegion *ir, int x, int y)
 {
 	VipsRect need;
@@ -377,11 +375,9 @@ vips_insert_build(VipsObject *object)
 
 	if (vips_image_pio_input(insert->main) ||
 		vips_image_pio_input(insert->sub) ||
-		vips_check_bands_1orn(class->nickname,
-			insert->main, insert->sub) ||
+		vips_check_bands_1orn(class->nickname, insert->main, insert->sub) ||
 		vips_check_coding_known(class->nickname, insert->main) ||
-		vips_check_coding_same(class->nickname,
-			insert->main, insert->sub))
+		vips_check_coding_same(class->nickname, insert->main, insert->sub))
 		return -1;
 
 	/* Cast our input images up to a common format and bands.

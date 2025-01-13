@@ -57,10 +57,9 @@ extern "C" {
 	(G_TYPE_INSTANCE_GET_CLASS((obj), \
 		VIPS_TYPE_INTERPOLATE, VipsInterpolateClass))
 
-typedef struct _VipsInterpolate {
+struct _VipsInterpolate {
 	VipsObject parent_object;
-
-} VipsInterpolate;
+};
 
 /* An interpolation function. This is a class method, but we have a lookup
  * function for it to speed up dispatch. Write to the memory at "out",
@@ -107,7 +106,7 @@ VIPS_API
 int vips_interpolate_get_window_offset(VipsInterpolate *interpolate);
 
 /* How many bits of precision we keep for transformations, ie. how many
- * pre-computed matricies we have.
+ * pre-computed matrices we have.
  */
 #define VIPS_TRANSFORM_SHIFT (6)
 #define VIPS_TRANSFORM_SCALE (1 << VIPS_TRANSFORM_SHIFT)

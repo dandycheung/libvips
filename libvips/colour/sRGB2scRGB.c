@@ -98,7 +98,7 @@ vips_sRGB2scRGB_line_8(float *restrict q, VipsPel *restrict p,
 			q[0] = vips_v2Y_8[p[0]];
 			q[1] = vips_v2Y_8[p[1]];
 			q[2] = vips_v2Y_8[p[2]];
-			q[3] = p[3];
+			q[3] = p[3] / 255.0;
 
 			p += 4;
 			q += 4;
@@ -114,7 +114,7 @@ vips_sRGB2scRGB_line_8(float *restrict q, VipsPel *restrict p,
 			q += 3;
 
 			for (j = 0; j < extra_bands; j++)
-				q[j] = p[j];
+				q[j] = p[j] / 255.0;
 			p += extra_bands;
 			q += extra_bands;
 		}
@@ -144,7 +144,7 @@ vips_sRGB2scRGB_line_16(float *restrict q, unsigned short *restrict p,
 			q[0] = vips_v2Y_16[p[0]];
 			q[1] = vips_v2Y_16[p[1]];
 			q[2] = vips_v2Y_16[p[2]];
-			q[3] = p[3] / 256.0;
+			q[3] = p[3] / 65535.0;
 
 			p += 4;
 			q += 4;
@@ -160,7 +160,7 @@ vips_sRGB2scRGB_line_16(float *restrict q, unsigned short *restrict p,
 			q += 3;
 
 			for (j = 0; j < extra_bands; j++)
-				q[j] = p[j] / 256.0;
+				q[j] = p[j] / 65535.0;
 			p += extra_bands;
 			q += extra_bands;
 		}
@@ -230,18 +230,22 @@ vips_sRGB2scRGB_build(VipsObject *object)
 	if (vips_check_bands_atleast(class->nickname, in, 3))
 		return -1;
 
+	// we are changing the gamma, so any profile on the image can no longer
+	// work (and will cause horrible problems in any downstream colour
+	// handling)
+	if (vips_copy(in, &t[0], NULL))
+		return -1;
+	in = t[0];
+	vips_image_remove(in, VIPS_META_ICC_NAME);
+
 	format = in->Type == VIPS_INTERPRETATION_RGB16
 		? VIPS_FORMAT_USHORT
 		: VIPS_FORMAT_UCHAR;
 	if (in->BandFmt != format) {
-		if (vips_cast(in, &t[0], format, NULL))
+		if (vips_cast(in, &t[1], format, NULL))
 			return -1;
+		in = t[1];
 	}
-	else {
-		t[0] = in;
-		g_object_ref(t[0]);
-	}
-	in = t[0];
 
 	out = vips_image_new();
 	if (vips_image_pipelinev(out,

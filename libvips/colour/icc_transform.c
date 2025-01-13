@@ -519,7 +519,7 @@ vips_icc_print_profile(const char *name, cmsHPROFILE profile)
 
 		char name[5];
 
-		vips_strncpy(name, (const char *) &pcs_as_be, 5);
+		g_strlcpy(name, (const char *) &pcs_as_be, 5);
 		printf("PCS: %#x (%s)\n", pcs, name);
 	}
 
@@ -650,13 +650,14 @@ vips_icc_load_profile_blob(VipsBlob *blob,
  * unref the blob if it's useless.
  */
 static cmsHPROFILE
-vips_icc_verify_blob(VipsBlob **blob, VipsImage *image, VipsIntent intent)
+vips_icc_verify_blob(VipsIcc *icc, VipsBlob **blob)
 {
 	if (*blob) {
-		cmsHPROFILE profile;
+		VipsColourCode *code = (VipsColourCode *) icc;
+		cmsHPROFILE profile = vips_icc_load_profile_blob(*blob,
+			code->in, icc->intent, LCMS_USED_AS_INPUT);
 
-		if (!(profile = vips_icc_load_profile_blob(*blob,
-				  image, intent, LCMS_USED_AS_INPUT))) {
+		if (!profile) {
 			vips_area_unref((VipsArea *) *blob);
 			*blob = NULL;
 		}
@@ -675,10 +676,10 @@ vips_icc_verify_blob(VipsBlob **blob, VipsImage *image, VipsIntent intent)
  *	0		1		file
  *	1		1		image, then fall back to file
  *
- * If averything fails, we fall back to our built-in profiles, either
- * srgb or cmyk, depending on the input image.
+ * If averything fails, we fall back to one of our built-in profiles,
+ * depending on the input image.
  *
- * We set attach_input_profile if we used a non-emdedded profile. The profile
+ * We set attach_input_profile if we used a non-embedded profile. The profile
  * in in_blob will need to be attached to the output image in some way.
  */
 static int
@@ -695,8 +696,7 @@ vips_icc_set_import(VipsIcc *icc,
 	if (code->in &&
 		(embedded || !input_profile_filename)) {
 		icc->in_blob = vips_icc_get_profile_image(code->in);
-		icc->in_profile = vips_icc_verify_blob(&icc->in_blob,
-			code->in, icc->intent);
+		icc->in_profile = vips_icc_verify_blob(icc, &icc->in_blob);
 	}
 
 	/* Try profile from filename.
@@ -704,15 +704,12 @@ vips_icc_set_import(VipsIcc *icc,
 	if (code->in &&
 		!icc->in_blob &&
 		input_profile_filename) {
-		if (
-			!vips_profile_load(input_profile_filename,
-				&icc->in_blob, NULL) &&
-			(icc->in_profile = vips_icc_verify_blob(&icc->in_blob,
-				 code->in, icc->intent)))
+		if (!vips_profile_load(input_profile_filename, &icc->in_blob, NULL) &&
+			(icc->in_profile = vips_icc_verify_blob(icc, &icc->in_blob)))
 			icc->non_standard_input_profile = TRUE;
 	}
 
-	/* Try built-in profile.
+	/* Try a built-in profile.
 	 */
 	if (code->in &&
 		!icc->in_profile) {
@@ -733,10 +730,8 @@ vips_icc_set_import(VipsIcc *icc,
 			break;
 		}
 
-		if (
-			!vips_profile_load(name, &icc->in_blob, NULL) &&
-			(icc->in_profile = vips_icc_verify_blob(&icc->in_blob,
-				 code->in, icc->intent)))
+		if (!vips_profile_load(name, &icc->in_blob, NULL) &&
+			(icc->in_profile = vips_icc_verify_blob(icc, &icc->in_blob)))
 			icc->non_standard_input_profile = TRUE;
 	}
 
@@ -934,7 +929,11 @@ vips_icc_import_line(VipsColour *colour,
 		else
 			decode_xyz(encoded, q, chunk);
 
-		p += PIXEL_BUFFER_SIZE * VIPS_IMAGE_SIZEOF_PEL(colour->in[0]);
+		// use input_bands, since in[0] may have had alpha removed,
+		// and can have 1, 3 or 4 bands
+		p += PIXEL_BUFFER_SIZE *
+			colour->input_bands *
+			VIPS_IMAGE_SIZEOF_ELEMENT(colour->in[0]);
 		q += PIXEL_BUFFER_SIZE * 3;
 	}
 }
@@ -1076,7 +1075,7 @@ vips_icc_export_line_xyz(VipsColour *colour,
 	VipsPel *q;
 	int x;
 
-	/* Buffer of encoded float pixels we transform.
+	/* Buffer of encoded float pixels we transform to device space.
 	 */
 	float encoded[3 * PIXEL_BUFFER_SIZE];
 
@@ -1089,7 +1088,11 @@ vips_icc_export_line_xyz(VipsColour *colour,
 		cmsDoTransform(icc->trans, encoded, q, chunk);
 
 		p += PIXEL_BUFFER_SIZE * 3;
-		q += PIXEL_BUFFER_SIZE * VIPS_IMAGE_SIZEOF_PEL(colour->out);
+		// use colour->bands, since out may have had alpha reattached
+		// and can have extra bands
+		q += PIXEL_BUFFER_SIZE *
+			colour->bands *
+			VIPS_IMAGE_SIZEOF_ELEMENT(colour->out);
 	}
 }
 
@@ -1424,17 +1427,19 @@ vips_icc_is_compatible_profile(VipsImage *image,
  * Import an image from device space to D65 LAB with an ICC profile. If @pcs is
  * set to #VIPS_PCS_XYZ, use CIE XYZ PCS instead.
  *
- * If @embedded is set, the input profile is taken from the input image
- * metadata. If there is no embedded profile,
- * @input_profile is used as a fall-back.
- * You can test for the
- * presence of an embedded profile with
- * vips_image_get_typeof() with #VIPS_META_ICC_NAME as an argument. This will
- * return %GType 0 if there is no profile.
+ * The input profile is searched for in three places:
  *
- * If @embedded is not set, the input profile is taken from
- * @input_profile. If @input_profile is not supplied, the
- * metadata profile, if any, is used as a fall-back.
+ *	  1. If @embedded is set, libvips will try to use any profile in the input
+ *	  image metadata. You can test for the presence of an embedded profile
+ *	  with vips_image_get_typeof() with #VIPS_META_ICC_NAME as an argument.
+ *	  This will return %GType 0 if there is no profile.
+ *
+ *	  2. Otherwise, if @input_profile is set, libvips will try to load a
+ *	  profile from the named file. This can aslso be the name of one of the
+ *	  built-in profiles.
+ *
+ *	  3. Otherwise, libvips will try to pick a compatible profile from the set
+ *	  of built-in profiles.
  *
  * If @black_point_compensation is set, LCMS black point compensation is
  * enabled.
@@ -1513,17 +1518,19 @@ vips_icc_export(VipsImage *in, VipsImage **out, ...)
  * profile-connection space with the input profile and then to the output
  * space with the output profile.
  *
- * If @embedded is set, the input profile is taken from the input image
- * metadata, if present. If there is no embedded profile,
- * @input_profile is used as a fall-back.
- * You can test for the
- * presence of an embedded profile with
- * vips_image_get_typeof() with #VIPS_META_ICC_NAME as an argument. This will
- * return %GType 0 if there is no profile.
+ * The input profile is searched for in three places:
  *
- * If @embedded is not set, the input profile is taken from
- * @input_profile. If @input_profile is not supplied, the
- * metadata profile, if any, is used as a fall-back.
+ *	  1. If @embedded is set, libvips will try to use any profile in the input
+ *	  image metadata. You can test for the presence of an embedded profile
+ *	  with vips_image_get_typeof() with #VIPS_META_ICC_NAME as an argument.
+ *	  This will return %GType 0 if there is no profile.
+ *
+ *	  2. Otherwise, if @input_profile is set, libvips will try to load a
+ *	  profile from the named file. This can aslso be the name of one of the
+ *	  built-in profiles.
+ *
+ *	  3. Otherwise, libvips will try to pick a compatible profile from the set
+ *	  of built-in profiles.
  *
  * If @black_point_compensation is set, LCMS black point compensation is
  * enabled.

@@ -36,11 +36,11 @@
 
 /* Defined in config.h
  */
-#ifdef _VIPS_PUBLIC
-#define VIPS_API _VIPS_PUBLIC extern
-#else
-#define VIPS_API extern
+#ifndef _VIPS_PUBLIC
+#define _VIPS_PUBLIC
 #endif
+
+#define VIPS_API _VIPS_PUBLIC extern
 
 /* VIPS_DISABLE_DEPRECATION_WARNINGS:
  *
@@ -105,6 +105,10 @@ struct _VipsSource;
 typedef struct _VipsSource VipsSource;
 struct _VipsTarget;
 typedef struct _VipsTarget VipsTarget;
+struct _VipsInterpolate;
+typedef struct _VipsInterpolate VipsInterpolate;
+struct _VipsOperation;
+typedef struct _VipsOperation VipsOperation;
 
 #ifdef __cplusplus
 }

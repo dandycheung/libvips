@@ -103,12 +103,11 @@ typedef struct _VipsMeta {
  */
 VIPS_API
 int vips__exif_parse(VipsImage *image);
-/* TODO(kleisauke): VIPS_API is required by the heif module.
- */
-VIPS_API
 int vips__exif_update(VipsImage *image);
 
 void vips_check_init(void);
+
+void vips__vector_init(void);
 
 void vips__meta_init_types(void);
 void vips__meta_destroy(VipsImage *im);
@@ -152,8 +151,8 @@ extern gboolean vips__cache_trace;
 void vips__thread_init(void);
 void vips__threadpool_init(void);
 void vips__threadpool_shutdown(void);
-int vips__thread_execute(const char *name, GFunc func, gpointer data);
 VIPS_API void vips__worker_lock(GMutex *mutex);
+VIPS_API void vips__worker_cond_wait(GCond *cond, GMutex *mutex);
 
 void vips__cache_init(void);
 
@@ -166,19 +165,12 @@ int vips__object_leak(void);
 int vips__open_image_read(const char *filename);
 int vips__open_image_write(const char *filename, gboolean temp);
 
-/* im_image_open_input() needs to have this visible.
+/* Defined in `vips.h`, unless building with `-Ddeprecated=false`
  */
-#if VIPS_ENABLE_DEPRECATED
-VIPS_API
-#endif
+#if !VIPS_ENABLE_DEPRECATED
 int vips_image_open_input(VipsImage *image);
-
-/* im_image_open_output() needs to have this visible.
- */
-#if VIPS_ENABLE_DEPRECATED
-VIPS_API
-#endif
 int vips_image_open_output(VipsImage *image);
+#endif
 
 void vips__link_break_all(VipsImage *im);
 void *vips__link_map(VipsImage *image, gboolean upstream,
@@ -188,26 +180,13 @@ gboolean vips__mmap_supported(int fd);
 void *vips__mmap(int fd, int writeable, size_t length, gint64 offset);
 int vips__munmap(const void *start, size_t length);
 
-/* im_mapfile() needs to have this visible.
+/* Defined in `vips.h`, unless building with `-Ddeprecated=false`
  */
-#if VIPS_ENABLE_DEPRECATED
-VIPS_API
-#endif
+#if !VIPS_ENABLE_DEPRECATED
 int vips_mapfile(VipsImage *image);
-
-/* im_mapfilerw() needs to have this visible.
- */
-#if VIPS_ENABLE_DEPRECATED
-VIPS_API
-#endif
 int vips_mapfilerw(VipsImage *image);
-
-/* im_remapfilerw() needs to have this visible.
- */
-#if VIPS_ENABLE_DEPRECATED
-VIPS_API
-#endif
 int vips_remapfilerw(VipsImage *image);
+#endif
 
 void vips__buffer_init(void);
 void vips__buffer_shutdown(void);
@@ -223,11 +202,11 @@ int vips__has_extension_block(VipsImage *im);
 /* TODO(kleisauke): VIPS_API is required by vipsheader.
  */
 VIPS_API
-void *vips__read_extension_block(VipsImage *im, int *size);
+void *vips__read_extension_block(VipsImage *im, size_t *size);
 /* TODO(kleisauke): VIPS_API is required by vipsedit.
  */
 VIPS_API
-int vips__write_extension_block(VipsImage *im, void *buf, int size);
+int vips__write_extension_block(VipsImage *im, void *buf, size_t size);
 int vips__writehist(VipsImage *image);
 /* TODO(kleisauke): VIPS_API is required by vipsedit.
  */
@@ -246,12 +225,11 @@ void vips_image_preeval(VipsImage *image);
 void vips_image_eval(VipsImage *image, guint64 processed);
 void vips_image_posteval(VipsImage *image);
 
-/* im_openout() needs to have this visible.
+/* Defined in `vips.h`, unless building with `-Ddeprecated=false`
  */
-#if VIPS_ENABLE_DEPRECATED
-VIPS_API
-#endif
+#if !VIPS_ENABLE_DEPRECATED
 VipsImage *vips_image_new_mode(const char *filename, const char *mode);
+#endif
 
 int vips__formatalike_vec(VipsImage **in, VipsImage **out, int n);
 int vips__sizealike_vec(VipsImage **in, VipsImage **out, int n);
@@ -292,7 +270,6 @@ void vips__draw_line_direct(VipsImage *image, int x1, int y1, int x2, int y2,
 void vips__draw_circle_direct(VipsImage *image, int cx, int cy, int r,
 	VipsDrawScanline draw_scanline, void *client);
 
-int vips__insert_just_one(VipsRegion *out, VipsRegion *in, int x, int y);
 int vips__insert_paste_region(VipsRegion *out, VipsRegion *in, VipsRect *pos);
 
 /* Register base vips interpolators, called during startup.

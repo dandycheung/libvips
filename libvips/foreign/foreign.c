@@ -83,13 +83,17 @@
  *
  * This set of operations load and save images in a variety of formats.
  *
- * The operations share a base class that offers a simple way to search for a
- * subclass of #VipsForeign which can load a certain file (see
- * vips_foreign_find_load()) or buffer (see vips_foreign_find_load_buffer()),
- * or which could be used to save an image to a
- * certain file type (see vips_foreign_find_save() and
- * vips_foreign_find_save_buffer()). You can then run these
- * operations using vips_call() and friends to perform the load or save.
+ * # Load and save
+ *
+ * You can load and save from and to files, memory areas, and the libvips IO
+ * abstractions, #VipsSource and #VipsTarget.
+ *
+ * Use vips_foreign_find_load(), vips_foreign_find_load_buffer() and
+ * vips_foreign_find_load_source() to find a loader for an object. Use
+ * vips_foreign_find_save(), vips_foreign_find_save_buffer() and
+ * vips_foreign_find_save_target() to find a saver for a format. You can then
+ * run these operations using vips_call() and friends to perform the load or
+ * save.
  *
  * vips_image_write_to_file() and vips_image_new_from_file() and friends use
  * these functions to automate file load and save.
@@ -101,6 +105,38 @@
  *     "compression", VIPS_FOREIGN_TIFF_COMPRESSION_JPEG,
  *     NULL);
  * ]|
+ *
+ * # Image metadata
+ *
+ * All loaders attach all image metadata as libvips properties on load.
+ *
+ * You can change metadata with vips_image_set_int() and friends.
+ *
+ * During save, you can use @keep to specify which metadata to retain,
+ * defaults to all, see #VipsForeignKeep. Setting @profile will
+ * automatically keep the ICC profile.
+ *
+ * # Many page images
+ *
+ * By default, libvips will only load the first page of many page or animated
+ * images. Use @page and @n to set the start page and the number of pages to
+ * load. Set @n to -1 to load all pages.
+ *
+ * Many page images are loaded as a tall, thin strip of pages.
+ *
+ * Use vips_image_get_page_height() and vips_image_get_n_pages() to find the
+ * page height and number of pages of a loaded image.
+ *
+ * Use @page_height to set the page height for image save.
+ *
+ * # Alpha save
+ *
+ * Not all image formats support alpha. If you try to save an image with an
+ * alpha channel to a format that does not support it, the alpha will be
+ * automatically flattened out. Use @background (default 0) to set the colour
+ * that alpha should be flattened against.
+ *
+ * # Adding new formats
  *
  * To add support for a new file format to vips, simply define a new subclass
  * of #VipsForeignLoad or #VipsForeignSave.
@@ -385,13 +421,20 @@ vips_foreign_init(VipsForeign *object)
 static void *
 file_add_class(VipsForeignClass *class, GSList **files)
 {
-	/* We exclude "rawload" as it has a different API.
+	VipsOperationClass *operation_class = VIPS_OPERATION_CLASS(class);
+
+	// don't consider blocked classes ... we don't want eg. sniffers to run
+	if (operation_class->flags & VIPS_OPERATION_BLOCKED)
+		return NULL;
+
+	// exclude "rawload" as it has a different API.
+	if (vips_isprefix("rawload", VIPS_OBJECT_CLASS(class)->nickname))
+		return NULL;
+
+	/* Append so we don't reverse the list of files. Sort will
+	 * not reorder items of equal priority.
 	 */
-	if (!vips_isprefix("rawload", VIPS_OBJECT_CLASS(class)->nickname))
-		/* Append so we don't reverse the list of files. Sort will
-		 * not reorder items of equal priority.
-		 */
-		*files = g_slist_append(*files, class);
+	*files = g_slist_append(*files, class);
 
 	return NULL;
 }
@@ -506,8 +549,8 @@ vips_foreign_find_load_sub(VipsForeignLoadClass *load_class,
 
 	/* Ignore the buffer and source loaders.
 	 */
-	if (vips_ispostfix(object_class->nickname, "_buffer") ||
-		vips_ispostfix(object_class->nickname, "_source"))
+	if (g_str_has_suffix(object_class->nickname, "_buffer") ||
+		g_str_has_suffix(object_class->nickname, "_source"))
 		return NULL;
 
 #ifdef DEBUG
@@ -622,7 +665,7 @@ vips_foreign_find_load_buffer_sub(VipsForeignLoadClass *load_class,
 
 	/* Skip non-buffer loaders.
 	 */
-	if (!vips_ispostfix(object_class->nickname, "_buffer"))
+	if (!g_str_has_suffix(object_class->nickname, "_buffer"))
 		return NULL;
 
 	if (load_class->is_a_buffer) {
@@ -680,7 +723,7 @@ vips_foreign_find_load_source_sub(void *item, void *a, void *b)
 
 	/* Skip non-source loaders.
 	 */
-	if (!vips_ispostfix(object_class->nickname, "_source"))
+	if (!g_str_has_suffix(object_class->nickname, "_source"))
 		return NULL;
 
 	if (load_class->is_a_source) {
@@ -986,7 +1029,7 @@ vips_foreign_load_start(VipsImage *out, void *a, void *b)
 		 * Some versions of ImageMagick give different results between
 		 * Ping and Load for some formats, for example.
 		 *
-		 * If the load fails, we need to stop
+		 * If the load fails, we need to stop.
 		 */
 		if (class->load(load) ||
 			vips_image_pio_input(load->real) ||
@@ -1390,8 +1433,7 @@ vips__foreign_convert_saveable(VipsImage *in, VipsImage **ready,
 			in->Type != VIPS_INTERPRETATION_XYZ) {
 			VipsImage *out;
 
-			if (vips_colourspace(in, &out,
-					VIPS_INTERPRETATION_scRGB, NULL)) {
+			if (vips_colourspace(in, &out, VIPS_INTERPRETATION_scRGB, NULL)) {
 				g_object_unref(in);
 				return -1;
 			}
@@ -1433,7 +1475,6 @@ vips__foreign_convert_saveable(VipsImage *in, VipsImage **ready,
 		in->Type != VIPS_INTERPRETATION_CMYK &&
 		in->Type != VIPS_INTERPRETATION_sRGB &&
 		in->Type != VIPS_INTERPRETATION_RGB16 &&
-		in->Type != VIPS_INTERPRETATION_scRGB &&
 		vips_colourspace_issupported(in) &&
 		(saveable == VIPS_SAVEABLE_RGB ||
 			saveable == VIPS_SAVEABLE_RGBA ||
@@ -1669,33 +1710,72 @@ vips__foreign_convert_saveable(VipsImage *in, VipsImage **ready,
 		in = out;
 	}
 
+	*ready = in;
+
+	return 0;
+}
+
+static void *
+vips_foreign_save_remove_metadata(VipsImage *image,
+	const char *field, GValue *value, void *user_data)
+{
+	VipsForeignKeep keep = *((VipsForeignKeep *) user_data);
+
+	// we are only interested in metadata
+	if (!vips_isprefix("png-comment-", field) &&
+		!vips_isprefix("magickprofile-", field) &&
+		strcmp(field, VIPS_META_IMAGEDESCRIPTION) != 0 &&
+		!g_str_has_suffix(field, "-data"))
+		return NULL;
+
+	if ((strcmp(field, VIPS_META_EXIF_NAME) == 0 &&
+			(keep & VIPS_FOREIGN_KEEP_EXIF)) ||
+		(strcmp(field, VIPS_META_XMP_NAME) == 0 &&
+			(keep & VIPS_FOREIGN_KEEP_XMP)) ||
+		(strcmp(field, VIPS_META_IPTC_NAME) == 0 &&
+			(keep & VIPS_FOREIGN_KEEP_IPTC)) ||
+		(strcmp(field, VIPS_META_ICC_NAME) == 0 &&
+			(keep & VIPS_FOREIGN_KEEP_ICC)) ||
+		(keep & VIPS_FOREIGN_KEEP_OTHER))
+		return NULL;
+
+	if (!vips_image_remove(image, field))
+		return image;
+
+	return NULL;
+}
+
+int
+vips__foreign_update_metadata(VipsImage *in,
+	VipsForeignKeep keep)
+{
+	/* Rebuild exif from tags, if we'll be saving it.
+	 */
+	if ((keep & VIPS_FOREIGN_KEEP_EXIF) &&
+		vips__exif_update(in))
+		return -1;
+
+	/* Remove metadata, if any.
+	 */
+	if (keep != VIPS_FOREIGN_KEEP_ALL &&
+		vips_image_map(in, vips_foreign_save_remove_metadata, &keep))
+		return -1;
+
 	/* Some format libraries, like libpng, will throw a hard error if the
 	 * profile is inappropriate for this image type. With profiles inherited
 	 * from a source image, this can happen all the time, so we
 	 * want to silently drop the profile in this case.
 	 */
-	if (vips_image_get_typeof(in, VIPS_META_ICC_NAME)) {
+	if ((keep & VIPS_FOREIGN_KEEP_ICC) &&
+		vips_image_get_typeof(in, VIPS_META_ICC_NAME)) {
 		const void *data;
 		size_t length;
 
-		if (!vips_image_get_blob(in, VIPS_META_ICC_NAME,
-				&data, &length) &&
-			!vips_icc_is_compatible_profile(in, data, length)) {
-			VipsImage *out;
-
-			if (vips_copy(in, &out, NULL)) {
-				g_object_unref(in);
-				return -1;
-			}
-			g_object_unref(in);
-
-			in = out;
-
-			vips_image_remove(in, VIPS_META_ICC_NAME);
-		}
+		if (!vips_image_get_blob(in, VIPS_META_ICC_NAME, &data, &length) &&
+			!vips_icc_is_compatible_profile(in, data, length) &&
+			!vips_image_remove(in, VIPS_META_ICC_NAME))
+			return -1;
 	}
-
-	*ready = in;
 
 	return 0;
 }
@@ -1705,29 +1785,47 @@ vips_foreign_save_build(VipsObject *object)
 {
 	VipsForeignSave *save = VIPS_FOREIGN_SAVE(object);
 
+	/* The deprecated "strip" field sets "keep" to none.
+	 */
+	if (vips_object_argument_isset(object, "strip") &&
+		!vips_object_argument_isset(object, "keep"))
+		save->keep = save->strip
+			? VIPS_FOREIGN_KEEP_NONE
+			: VIPS_FOREIGN_KEEP_ALL;
+
+	/* Keep ICC profile by default when a user profile has been set.
+	 */
+	if ((save->keep & VIPS_FOREIGN_KEEP_ICC) == 0 &&
+		vips_object_argument_isset(object, "profile"))
+		save->keep |= VIPS_FOREIGN_KEEP_ICC;
+
 	if (save->in) {
-		VipsForeignSaveClass *class =
-			VIPS_FOREIGN_SAVE_GET_CLASS(save);
+		VipsForeignSaveClass *class = VIPS_FOREIGN_SAVE_GET_CLASS(save);
 		VipsImage *ready;
+		VipsImage *x;
 
 		if (vips__foreign_convert_saveable(save->in, &ready,
 				class->saveable, class->format_table, class->coding,
 				save->background))
 			return -1;
 
-		if (save->page_height) {
-			VipsImage *x;
-
-			if (vips_copy(ready, &x, NULL)) {
-				VIPS_UNREF(ready);
-				return -1;
-			}
+		/* Updating metadata, need to copy the image.
+		 */
+		if (vips_copy(ready, &x, NULL)) {
 			VIPS_UNREF(ready);
-			ready = x;
-
-			vips_image_set_int(ready,
-				VIPS_META_PAGE_HEIGHT, save->page_height);
+			return -1;
 		}
+		VIPS_UNREF(ready);
+		ready = x;
+
+		if (vips__foreign_update_metadata(ready, save->keep)) {
+			VIPS_UNREF(ready);
+			return -1;
+		}
+
+		if (save->page_height)
+			vips_image_set_int(ready, VIPS_META_PAGE_HEIGHT,
+				save->page_height);
 
 		VIPS_UNREF(save->ready);
 		save->ready = ready;
@@ -1800,12 +1898,13 @@ vips_foreign_save_class_init(VipsForeignSaveClass *class)
 		VIPS_ARGUMENT_REQUIRED_INPUT,
 		G_STRUCT_OFFSET(VipsForeignSave, in));
 
-	VIPS_ARG_BOOL(class, "strip", 100,
-		_("Strip"),
-		_("Strip all metadata from image"),
+	VIPS_ARG_FLAGS(class, "keep", 100,
+		_("Keep"),
+		_("Which metadata to retain"),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
-		G_STRUCT_OFFSET(VipsForeignSave, strip),
-		FALSE);
+		G_STRUCT_OFFSET(VipsForeignSave, keep),
+		VIPS_TYPE_FOREIGN_KEEP,
+		VIPS_FOREIGN_KEEP_ALL);
 
 	VIPS_ARG_BOXED(class, "background", 101,
 		_("Background"),
@@ -1820,11 +1919,26 @@ vips_foreign_save_class_init(VipsForeignSaveClass *class)
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET(VipsForeignSave, page_height),
 		0, VIPS_MAX_COORD, 0);
+
+	VIPS_ARG_STRING(class, "profile", 103,
+		_("Profile"),
+		_("Filename of ICC profile to embed"),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET(VipsForeignSave, profile),
+		NULL);
+
+	VIPS_ARG_BOOL(class, "strip", 104,
+		_("Strip"),
+		_("Strip all metadata from image"),
+		VIPS_ARGUMENT_OPTIONAL_INPUT | VIPS_ARGUMENT_DEPRECATED,
+		G_STRUCT_OFFSET(VipsForeignSave, strip),
+		FALSE);
 }
 
 static void
 vips_foreign_save_init(VipsForeignSave *save)
 {
+	save->keep = VIPS_FOREIGN_KEEP_ALL;
 	save->background = vips_array_double_newv(1, 0.0);
 }
 
@@ -1842,13 +1956,15 @@ vips_foreign_find_save_sub(VipsForeignSaveClass *save_class,
 	/* All savers needs suffs defined since we use the suff to pick the
 	 * saver.
 	 */
-	if (!class->suffs)
+	if (!class->suffs) {
 		g_warning("no suffix defined for %s", object_class->nickname);
+		return NULL;
+	}
 
 	/* Skip non-file savers.
 	 */
-	if (vips_ispostfix(object_class->nickname, "_buffer") ||
-		vips_ispostfix(object_class->nickname, "_target"))
+	if (g_str_has_suffix(object_class->nickname, "_buffer") ||
+		g_str_has_suffix(object_class->nickname, "_target"))
 		return NULL;
 
 	/* vips_foreign_find_save() has already removed any options from the
@@ -2009,7 +2125,7 @@ vips_foreign_find_save_target_sub(VipsForeignSaveClass *save_class,
 
 	if (!G_TYPE_IS_ABSTRACT(G_TYPE_FROM_CLASS(class)) &&
 		class->suffs &&
-		vips_ispostfix(object_class->nickname, "_target") &&
+		g_str_has_suffix(object_class->nickname, "_target") &&
 		vips_filename_suffix_match(suffix, class->suffs))
 		return save_class;
 
@@ -2067,7 +2183,7 @@ vips_foreign_find_save_buffer_sub(VipsForeignSaveClass *save_class,
 
 	if (!G_TYPE_IS_ABSTRACT(G_TYPE_FROM_CLASS(class)) &&
 		class->suffs &&
-		vips_ispostfix(object_class->nickname, "_buffer") &&
+		g_str_has_suffix(object_class->nickname, "_buffer") &&
 		vips_filename_suffix_match(suffix, class->suffs))
 		return save_class;
 
@@ -2605,7 +2721,7 @@ vips_jxlsave_target(VipsImage *in, VipsTarget *target, ...)
  * * @dpi: %gdouble, render at this DPI
  * * @scale: %gdouble, scale render by this factor
  * * @background: #VipsArrayDouble background colour
- * * @password: %gchararray background colour
+ * * @password: %gchararray PDF password
  *
  * Render a PDF file into a VIPS image.
  *
@@ -2893,8 +3009,9 @@ vips_foreign_operation_init(void)
 	extern GType vips_foreign_save_tiff_target_get_type(void);
 
 	extern GType vips_foreign_load_raw_get_type(void);
-	extern GType vips_foreign_save_raw_get_type(void);
-	extern GType vips_foreign_save_raw_fd_get_type(void);
+	extern GType vips_foreign_save_raw_file_get_type(void);
+	extern GType vips_foreign_save_raw_buffer_get_type(void);
+	extern GType vips_foreign_save_raw_target_get_type(void);
 
 	extern GType vips_foreign_load_magick_file_get_type(void);
 	extern GType vips_foreign_load_magick_buffer_get_type(void);
@@ -2974,8 +3091,9 @@ vips_foreign_operation_init(void)
 	vips_foreign_print_matrix_get_type();
 
 	vips_foreign_load_raw_get_type();
-	vips_foreign_save_raw_get_type();
-	vips_foreign_save_raw_fd_get_type();
+	vips_foreign_save_raw_file_get_type();
+	vips_foreign_save_raw_buffer_get_type();
+	vips_foreign_save_raw_target_get_type();
 
 	vips_foreign_load_vips_file_get_type();
 	vips_foreign_load_vips_source_get_type();

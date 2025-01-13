@@ -778,25 +778,20 @@ vips_object_get_argument(VipsObject *object, const char *name,
 {
 	VipsObjectClass *class = VIPS_OBJECT_GET_CLASS(object);
 
-	if (!(*pspec = g_object_class_find_property(
-			  G_OBJECT_CLASS(class), name))) {
-		vips_error(class->nickname,
-			_("no property named `%s'"), name);
+	if (!(*pspec = g_object_class_find_property(G_OBJECT_CLASS(class), name))) {
+		vips_error(class->nickname, _("no property named `%s'"), name);
 		return -1;
 	}
 
 	if (!(*argument_class = (VipsArgumentClass *)
-				vips__argument_table_lookup(class->argument_table,
-					*pspec))) {
-		vips_error(class->nickname,
-			_("no vips argument named `%s'"), name);
+			vips__argument_table_lookup(class->argument_table, *pspec))) {
+		vips_error(class->nickname, _("no vips argument named `%s'"), name);
 		return -1;
 	}
 
 	if (!(*argument_instance = vips__argument_get_instance(
-			  *argument_class, object))) {
-		vips_error(class->nickname,
-			_("argument `%s' has no instance"), name);
+		  *argument_class, object))) {
+		vips_error(class->nickname, _("argument `%s' has no instance"), name);
 		return -1;
 	}
 
@@ -889,8 +884,7 @@ vips_object_clear_member(VipsArgumentInstance *argument_instance)
 			vips_object_print_name(object);
 			printf("  no longer refers to gobject %s (%p)\n",
 				G_OBJECT_TYPE_NAME(*member), *member);
-			printf("  count down to %d\n",
-				G_OBJECT(*member)->ref_count - 1);
+			printf("  count down to %d\n", G_OBJECT(*member)->ref_count - 1);
 #endif /*DEBUG_REF*/
 
 			/* We reffed the object.
@@ -903,8 +897,7 @@ vips_object_clear_member(VipsArgumentInstance *argument_instance)
 				G_OBJECT_TYPE_NAME(*member), *member);
 			printf("  no longer refers to vips object: ");
 			vips_object_print_name(object);
-			printf("  count down to %d\n",
-				G_OBJECT(object)->ref_count - 1);
+			printf("  count down to %d\n", G_OBJECT(object)->ref_count - 1);
 #endif /*DEBUG_REF*/
 
 			g_object_unref(object);
@@ -1069,8 +1062,7 @@ vips_object_arg_invalidate(GObject *argument,
 	 * operation.
 	 */
 	if (VIPS_IS_OPERATION(argument_instance->object))
-		vips_operation_invalidate(
-			VIPS_OPERATION(argument_instance->object));
+		vips_operation_invalidate(VIPS_OPERATION(argument_instance->object));
 }
 
 static void
@@ -1116,8 +1108,7 @@ vips__object_set_member(VipsObject *object, GParamSpec *pspec,
 			vips_object_print_name(object);
 			printf("  refers to gobject %s (%p)\n",
 				G_OBJECT_TYPE_NAME(*member), *member);
-			printf("  count up to %d\n",
-				G_OBJECT(*member)->ref_count);
+			printf("  count up to %d\n", G_OBJECT(*member)->ref_count);
 #endif /*DEBUG_REF*/
 
 			/* Ref the argument.
@@ -1130,8 +1121,7 @@ vips__object_set_member(VipsObject *object, GParamSpec *pspec,
 				G_OBJECT_TYPE_NAME(*member), *member);
 			printf("  refers to vips object: ");
 			vips_object_print_name(object);
-			printf("  count up to %d\n",
-				G_OBJECT(object)->ref_count);
+			printf("  count up to %d\n", G_OBJECT(object)->ref_count);
 #endif /*DEBUG_REF*/
 
 			/* The argument reffs us.
@@ -1147,8 +1137,7 @@ vips__object_set_member(VipsObject *object, GParamSpec *pspec,
 
 			argument_instance->invalidate_id =
 				g_signal_connect(*member, "invalidate",
-					G_CALLBACK(
-						vips_object_arg_invalidate),
+					G_CALLBACK(vips_object_arg_invalidate),
 					argument_instance);
 		}
 		else if (argument_class->flags & VIPS_ARGUMENT_OUTPUT) {
@@ -1712,12 +1701,10 @@ traverse_find_required_priority(void *data, void *a, void *b)
 	return NULL;
 }
 
-static gint
-traverse_sort(gconstpointer a, gconstpointer b, void *user_data)
+static int
+traverse_sort(VipsArgumentClass *class1, VipsArgumentClass *class2,
+	void *user_data)
 {
-	VipsArgumentClass *class1 = (VipsArgumentClass *) a;
-	VipsArgumentClass *class2 = (VipsArgumentClass *) b;
-
 	return class1->priority - class2->priority;
 }
 
@@ -1880,7 +1867,7 @@ vips_object_set_argument_from_string(VipsObject *object,
 	VipsObjectClass *oclass;
 	GType otype;
 
-	GValue gvalue = { 0 };
+	GValue gvalue = G_VALUE_INIT;
 
 	VIPS_DEBUG_MSG("vips_object_set_argument_from_string: %s = %s\n",
 		name, value);
@@ -1902,12 +1889,10 @@ vips_object_set_argument_from_string(VipsObject *object,
 
 		flags = 0;
 		if (VIPS_IS_OPERATION(object))
-			flags = vips_operation_get_flags(
-				VIPS_OPERATION(object));
+			flags = vips_operation_get_flags(VIPS_OPERATION(object));
 
 		if (flags &
-			(VIPS_OPERATION_SEQUENTIAL_UNBUFFERED |
-				VIPS_OPERATION_SEQUENTIAL))
+			(VIPS_OPERATION_SEQUENTIAL_UNBUFFERED | VIPS_OPERATION_SEQUENTIAL))
 			access = VIPS_ACCESS_SEQUENTIAL;
 		else
 			access = VIPS_ACCESS_RANDOM;
@@ -1921,8 +1906,7 @@ vips_object_set_argument_from_string(VipsObject *object,
 		if (strcmp("stdin", filename) == 0) {
 			VipsSource *source;
 
-			if (!(source =
-						vips_source_new_from_descriptor(0)))
+			if (!(source = vips_source_new_from_descriptor(0)))
 				return -1;
 			if (!(out = vips_image_new_from_source(source,
 					  option_string,
@@ -2104,16 +2088,14 @@ vips_object_set_argument_from_string(VipsObject *object,
 			return -1;
 		}
 
-		if ((i = vips_enum_from_nick(class->nickname,
-				 otype, value)) < 0)
+		if ((i = vips_enum_from_nick(class->nickname, otype, value)) < 0)
 			return -1;
 
 		g_value_init(&gvalue, otype);
 		g_value_set_enum(&gvalue, i);
 	}
+
 	else if (G_IS_PARAM_SPEC_FLAGS(pspec)) {
-		/* Allow a symbolic name, or an int.
-		 */
 		int i;
 
 		if (!value) {
@@ -2121,17 +2103,13 @@ vips_object_set_argument_from_string(VipsObject *object,
 			return -1;
 		}
 
-		if (sscanf(value, "%d", &i) != 1 &&
-			(i = vips_flags_from_nick(class->nickname,
-				 otype, value)) < 0) {
-			vips_error(class->nickname,
-				_("'%s' is not an integer"), value);
+		if ((i = vips_flags_from_nick(class->nickname, otype, value)) < 0)
 			return -1;
-		}
 
 		g_value_init(&gvalue, otype);
 		g_value_set_flags(&gvalue, i);
 	}
+
 	else {
 		if (!value) {
 			vips_object_no_value(object, name);
@@ -2174,7 +2152,7 @@ vips_object_print_arg(VipsObject *object, GParamSpec *pspec, VipsBuf *buf)
 {
 	GType type = G_PARAM_SPEC_VALUE_TYPE(pspec);
 	const char *name = g_param_spec_get_name(pspec);
-	GValue value = { 0 };
+	GValue value = G_VALUE_INIT;
 	char *str_value;
 
 	g_value_init(&value, type);
@@ -2598,16 +2576,16 @@ vips_object_set_from_string(VipsObject *object, const char *string)
 	char buffer[VIPS_PATH_MAX];
 	char str[VIPS_PATH_MAX];
 
-	vips_strncpy(buffer, string, VIPS_PATH_MAX);
+	g_strlcpy(buffer, string, VIPS_PATH_MAX);
 
 	/* Does string start with a bracket? If it doesn't, enclose the whole
 	 * thing in [].
 	 */
 	if (!(q = vips__token_get(buffer, &token, str, VIPS_PATH_MAX)) ||
 		token != VIPS_TOKEN_LEFT)
-		vips_snprintf(buffer, VIPS_PATH_MAX, "[%s]", string);
+		g_snprintf(buffer, VIPS_PATH_MAX, "[%s]", string);
 	else
-		vips_strncpy(buffer, string, VIPS_PATH_MAX);
+		g_strlcpy(buffer, string, VIPS_PATH_MAX);
 
 	return vips_object_set_args(object, buffer);
 }
@@ -2626,9 +2604,9 @@ vips_object_new_from_string(VipsObjectClass *object_class, const char *p)
 	 * everything before that as the principal arg for the constructor.
 	 */
 	if ((q = vips__find_rightmost_brackets(p)))
-		vips_strncpy(str, p, VIPS_MIN(VIPS_PATH_MAX, q - p + 1));
+		g_strlcpy(str, p, VIPS_MIN(VIPS_PATH_MAX, q - p + 1));
 	else
-		vips_strncpy(str, p, VIPS_PATH_MAX);
+		g_strlcpy(str, p, VIPS_PATH_MAX);
 	if (!(object = object_class->new_from_string(str)))
 		return NULL;
 

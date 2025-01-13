@@ -199,8 +199,7 @@ vips_foreign_save_magick_next_image(VipsForeignSaveMagick *magick)
 	 */
 	image->dispose = BackgroundDispose;
 
-	if (!save->strip &&
-		magick_set_magick_profile(image, im, magick->exception)) {
+	if (magick_set_magick_profile(image, im, magick->exception)) {
 		magick_vips_error(class->nickname, magick->exception);
 		return -1;
 	}
@@ -352,15 +351,15 @@ vips_foreign_save_magick_build(VipsObject *object)
 	}
 
 	if (magick->format) {
-		vips_strncpy(magick->image_info->magick,
+		g_strlcpy(magick->image_info->magick,
 			magick->format, MaxPathExtent);
 		if (magick->filename)
-			(void) vips_snprintf(magick->image_info->filename,
+			(void) g_snprintf(magick->image_info->filename,
 				MaxPathExtent, "%s:%s",
 				magick->format, magick->filename);
 	}
 	else if (magick->filename) {
-		vips_strncpy(magick->image_info->filename,
+		g_strlcpy(magick->image_info->filename,
 			magick->filename, MaxPathExtent);
 	}
 

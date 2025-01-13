@@ -1,23 +1,11 @@
 private_libvips_headers = [
-    'include/vips/almostdeprecated.h',
-    'include/vips/deprecated.h',
-    'include/vips/vips7compat.h',
-    'include/vips/dispatch.h',
-    'include/vips/internal.h',
-    'include/vips/thread.h',
-    'include/vips/intl.h',
-    'include/vips/format.h',
-    'include/vips/mask.h',
-    'include/vips/private.h',
-    'include/vips/video.h',
-# ignore all .h files in libvips/*, these are internal
     'arithmetic/binary.h',
     'arithmetic/hough.h',
     'arithmetic/nary.h',
     'arithmetic/parithmetic.h',
     'arithmetic/statistic.h',
-    'arithmetic/unary.h',
     'arithmetic/unaryconst.h',
+    'arithmetic/unary.h',
     'colour/pcolour.h',
     'colour/profiles.h',
     'conversion/bandary.h',
@@ -31,38 +19,51 @@ private_libvips_headers = [
     'draw/pdraw.h',
     'foreign/dbh.h',
     'foreign/jpeg.h',
+    'foreign/libnsgif/lzw.h',
+    'foreign/libnsgif/nsgif.h',
+    'foreign/libnsgif/test/cli.h',
     'foreign/magick.h',
     'foreign/pforeign.h',
     'foreign/quantise.h',
     'foreign/tiff.h',
-    'foreign/libnsgif/lzw.h',
-    'foreign/libnsgif/nsgif.h',
-    'foreign/libnsgif/test/cli.h',
     'freqfilt/pfreqfilt.h',
     'histogram/hist_unary.h',
     'histogram/phistogram.h',
+    'include/vips/almostdeprecated.h',
+    'include/vips/deprecated.h',
+    'include/vips/dispatch.h',
+    'include/vips/format.h',
+    'include/vips/internal.h',
+    'include/vips/intl.h',
+    'include/vips/mask.h',
+    'include/vips/private.h',
+    'include/vips/thread.h',
+    'include/vips/video.h',
+    'include/vips/vips7compat.h',
     'iofuncs/sink.h',
     'morphology/pmorphology.h',
     'mosaicing/global_balance.h',
     'mosaicing/pmosaicing.h',
     'resample/presample.h',
-    'resample/templates.h'
+    'resample/templates.h',
 ]
 
 private_headers = []
 foreach private_libvips_header : private_libvips_headers
-    private_headers += [join_paths(project_source_root, 'libvips', private_libvips_header)]
+    private_headers += [project_source_root / 'libvips' / private_libvips_header]
 endforeach
 
 markdown_content_files = files(
+    'binding.md',
+    'Cite.md',
+    'Developer-checklist.md',
+    'Examples.md',
+    'How-it-opens-files.md',
     'How-it-works.md',
     'libvips-from-C++.md',
-    'Using-vipsthumbnail.md',
-    'How-it-opens-files.md',
-    'Examples.md',
-    'Cite.md',
-    'binding.md',
     'Making-image-pyramids.md',
+    'Using-vipsthumbnail.md',
+    'multipage-and-animated-images.md',
 )
 
 pandoc = find_program('pandoc', required: false)
@@ -73,7 +74,7 @@ if pandoc.found()
         output: '@BASENAME@.xml',
         arguments: [
             '@INPUT@',
-            '--template=@0@'.format(join_paths(meson.current_source_dir(), 'pandoc-docbook-template.docbook')),
+            '--template=@0@'.format(meson.current_source_dir() / 'pandoc-docbook-template.docbook'),
             '--wrap=none',
             '-V', 'title=@BASENAME@',
             '-f', 'markdown+smart',
@@ -94,34 +95,36 @@ if pandoc.found()
 else
     # use the pre-generated docbook files when pandoc is not available
     markdown_content_files_docbook = files(
+        'binding.xml',
+        'Cite.xml',
+        'Developer-checklist.xml',
+        'Examples.xml',
+        'How-it-opens-files.xml',
         'How-it-works.xml',
         'libvips-from-C++.xml',
-        'Using-vipsthumbnail.xml',
-        'How-it-opens-files.xml',
-        'Examples.xml',
-        'Cite.xml',
-        'binding.xml',
         'Making-image-pyramids.xml',
+        'Using-vipsthumbnail.xml',
+        'multipage-and-animated-images.xml',
     )
 endif
 
 content_files = files(
+    'extending.xml',
+    'file-format.xml',
+    'function-list.xml',
     'using-command-line.xml',
     'using-C.xml',
     'using-threads.xml',
-    'extending.xml',
-    'function-list.xml',
-    'file-format.xml',
 )
 
 images = files(
-    'images/owl.jpg',
-    'images/tn_owl.jpg',
-    'images/interconvert.png',
     'images/Combine.png',
+    'images/interconvert.png',
     'images/Memtrace.png',
+    'images/owl.jpg',
     'images/Sequence.png',
     'images/Sink.png',
+    'images/tn_owl.jpg',
     'images/Vips-smp.png',
 )
 
@@ -134,25 +137,21 @@ version_xml = configure_file(
 )
 
 glib_prefix = glib_dep.get_variable(pkgconfig: 'prefix')
-glib_docpath = glib_prefix / 'share' / 'gtk-doc' / 'html'
 docpath = get_option('prefix') / get_option('datadir') / 'gtk-doc' / 'html'
 
 gnome.gtkdoc('libvips',
-    mode: 'none',
     main_xml: 'libvips-docs.xml',
-    src_dir: [
-        join_paths(project_source_root, 'libvips'),
-        join_paths(project_build_root, 'libvips'),
-    ],
+    namespace: 'vips',
+    src_dir: 'libvips',
     dependencies: libvips_dep,
     ignore_headers: private_headers,
-    scan_args: '--rebuild-types',
+    scan_args: [ '--rebuild-types' ],
     mkdb_args: [ '--default-includes=vips/vips.h' ],
     fixxref_args: [
         '--html-dir=@0@'.format(docpath),
-        '--extra-dir=@0@'.format(join_paths(glib_docpath, 'glib')),
-        '--extra-dir=@0@'.format(join_paths(glib_docpath, 'gobject')),
-        '--extra-dir=@0@'.format(join_paths(glib_docpath, 'gio')),
+        '--extra-dir=@0@'.format(glib_prefix / gnome.gtkdoc_html_dir('glib')),
+        '--extra-dir=@0@'.format(glib_prefix / gnome.gtkdoc_html_dir('gobject')),
+        '--extra-dir=@0@'.format(glib_prefix / gnome.gtkdoc_html_dir('gio')),
     ],
     content_files: [ content_files, markdown_content_files_docbook, version_xml ],
     expand_content_files: [ content_files ],

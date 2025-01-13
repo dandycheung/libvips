@@ -66,6 +66,7 @@
 #endif /*HAVE_UNISTD_H*/
 #include <ctype.h>
 
+#define VIPS_DISABLE_DEPRECATION_WARNINGS
 #include <vips/vips.h>
 #include <vips/internal.h>
 #include <vips/debug.h>
@@ -184,7 +185,7 @@
  *
  * #VIPS_DEMAND_STYLE_SMALLTILE --- This is the most general demand format.
  * Output is demanded in small (around 100x100 pel) sections. This style works
- * reasonably efficiently, even for bizzarre operations like 45 degree rotate.
+ * reasonably efficiently, even for bizarre operations like 45 degree rotate.
  *
  * #VIPS_DEMAND_STYLE_FATSTRIP --- This operation would like to output strips
  * the width of the image and as high as possible. This option is suitable
@@ -1648,9 +1649,13 @@ vips_image_iskilled(VipsImage *image)
 
 	kill = image->kill;
 
+	// check the image we are signalling progress on too
+	if (image->progress_signal)
+		kill |= image->progress_signal->kill;
+
 	/* Has kill been set for this image? If yes, abort evaluation.
 	 */
-	if (image->kill) {
+	if (kill) {
 		VIPS_DEBUG_MSG("vips_image_iskilled: %s (%p) killed\n",
 			image->filename, image);
 		vips_error("VipsImage",
@@ -1683,6 +1688,10 @@ vips_image_set_kill(VipsImage *image, gboolean kill)
 			image->filename, image, kill);
 
 	image->kill = kill;
+
+	// set here too
+	if (image->progress_signal)
+		image->progress_signal->kill = kill;
 }
 
 /* Fills the given buffer with a temporary filename.
@@ -1695,7 +1704,7 @@ vips_image_temp_name(char *name, int size)
 
 	int serial = g_atomic_int_add(&global_serial, 1);
 
-	vips_snprintf(name, size, "temp-%d", serial);
+	g_snprintf(name, size, "temp-%d", serial);
 }
 
 /**
@@ -2152,8 +2161,7 @@ vips_image_new_from_buffer(const void *buf, size_t len,
 
 	vips_check_init();
 
-	if (!(operation_name =
-				vips_foreign_find_load_buffer(buf, len)))
+	if (!(operation_name = vips_foreign_find_load_buffer(buf, len)))
 		return NULL;
 
 	/* We don't take a copy of the data or free it.
@@ -2194,8 +2202,7 @@ VipsImage *
 vips_image_new_from_source(VipsSource *source,
 	const char *option_string, ...)
 {
-	const char *filename =
-		vips_connection_filename(VIPS_CONNECTION(source));
+	const char *filename = vips_connection_filename(VIPS_CONNECTION(source));
 
 	const char *operation_name;
 	va_list ap;
@@ -2250,8 +2257,7 @@ vips_image_new_from_source(VipsSource *source,
 		vips_area_unref(VIPS_AREA(blob));
 	}
 	else {
-		vips_error("VipsImage",
-			"%s", _("unable to load source"));
+		vips_error("VipsImage", "%s", _("unable to load source"));
 		result = -1;
 	}
 
@@ -3196,7 +3202,7 @@ vips_image_write_prepare(VipsImage *image)
 int
 vips_image_write_line(VipsImage *image, int ypos, VipsPel *linebuffer)
 {
-	int linesize = VIPS_IMAGE_SIZEOF_LINE(image);
+	guint64 linesize = VIPS_IMAGE_SIZEOF_LINE(image);
 
 	/* Is this the start of eval?
 	 */
@@ -3217,8 +3223,7 @@ vips_image_write_line(VipsImage *image, int ypos, VipsPel *linebuffer)
 	switch (image->dtype) {
 	case VIPS_IMAGE_SETBUF:
 	case VIPS_IMAGE_SETBUF_FOREIGN:
-		memcpy(VIPS_IMAGE_ADDR(image, 0, ypos),
-			linebuffer, linesize);
+		memcpy(VIPS_IMAGE_ADDR(image, 0, ypos), linebuffer, linesize);
 		break;
 
 	case VIPS_IMAGE_OPENOUT:
@@ -3229,10 +3234,8 @@ vips_image_write_line(VipsImage *image, int ypos, VipsPel *linebuffer)
 		break;
 
 	default:
-		vips_error("VipsImage",
-			_("unable to output to a %s image"),
-			vips_enum_string(VIPS_TYPE_IMAGE_TYPE,
-				image->dtype));
+		vips_error("VipsImage", _("unable to output to a %s image"),
+			vips_enum_string(VIPS_TYPE_IMAGE_TYPE, image->dtype));
 		return -1;
 	}
 
@@ -3652,14 +3655,10 @@ vips_image_pio_input(VipsImage *image)
 		break;
 
 	case VIPS_IMAGE_PARTIAL:
-		/* Should have had generate functions attached.
+		/* We can sometimes want to copy images with no generate func,
+		 * eg. if we are going to be manipulating metadata, so we
+		 * can't check for gen funcs. See dzsave direct mode.
 		 */
-		if (!image->generate_fn) {
-			vips_error("vips_image_pio_input",
-				"%s", _("no image data"));
-			return -1;
-		}
-
 		break;
 
 	case VIPS_IMAGE_MMAPIN:
